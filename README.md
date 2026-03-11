@@ -33,6 +33,10 @@ Claude support:
     - long `tool_result` content
     - large `toolUseResult.*` string fields
     - oversized `system/local_command` content
+- `reproduce_claude_safe.sh`
+  - runs the Claude `safe` compactor against the latest JSONL in the active Claude project folder
+- `compact_claude_session.py --show-lineage <session.jsonl>`
+  - prints lineage/provenance for a Claude session or compacted derivative
 
 ## Files
 

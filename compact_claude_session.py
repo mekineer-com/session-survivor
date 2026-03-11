@@ -12,7 +12,7 @@ import subprocess
 import sys
 from typing import Any
 
-from lineage import build_compaction_manifest
+from lineage import build_compaction_manifest, describe_lineage
 
 
 DEFAULT_OUTPUT_ROOT = pathlib.Path("/home/marcos/apps-codex/session-survivor/outputs/claude")
@@ -47,6 +47,11 @@ def parse_args() -> argparse.Namespace:
         "--show-summary",
         action="store_true",
         help="Print only a compact summary JSON to stdout.",
+    )
+    parser.add_argument(
+        "--show-lineage",
+        action="store_true",
+        help="Print lineage/provenance information for the input session and exit.",
     )
     return parser.parse_args()
 
@@ -176,6 +181,10 @@ def main() -> int:
     source = pathlib.Path(args.session).expanduser().resolve()
     if not source.exists():
         raise SystemExit(f"Session file not found: {source}")
+
+    if args.show_lineage:
+        print(json.dumps(describe_lineage(source), indent=2, ensure_ascii=False))
+        return 0
 
     output_root = pathlib.Path(args.output_root).expanduser().resolve()
     rel = relative_output_path(source)
