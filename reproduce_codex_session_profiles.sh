@@ -1,11 +1,11 @@
 #!/bin/sh
 set -eu
 
-ROOT="/home/marcos/apps-codex"
-TOOL="$ROOT/_tools/session-compaction/compact_codex_session.py"
+ROOT="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+TOOL="$ROOT/compact_codex_session.py"
 SESSION_ROOT="/home/marcos/.codex/sessions"
 STAMP="$(date +%Y%m%dT%H%M%S)"
-OUTROOT="$ROOT/_exports/sessions/repro/$STAMP"
+OUTROOT="$ROOT/outputs/repro/$STAMP"
 
 latest_session() {
   python3 - <<'PY'

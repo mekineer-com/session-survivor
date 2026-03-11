@@ -11,6 +11,8 @@ import subprocess
 import sys
 import uuid
 
+from lineage import build_compaction_manifest, extract_checkpoint_provenance, infer_source_kind
+
 
 SESSION_ROOT = pathlib.Path.home() / ".codex" / "sessions"
 DEFAULT_OUTPUT_ROOT = pathlib.Path("/home/marcos/apps-codex/_exports/sessions")
@@ -579,17 +581,26 @@ def synthetic_compacted_turn(
         summary += f" Topics: {', '.join(topics)}."
     summary += " Current project truth should come from HANDOFF.md and the repo."
     checkpoint = extract_checkpoint(old_turns, context_terms, topics)
+    parent_provenance = extract_checkpoint_provenance(source)
+    parent_chain_depth = 0
+    if parent_provenance:
+        try:
+            parent_chain_depth = int(parent_provenance.get("ancestor_depth") or 0) + 1
+        except Exception:
+            parent_chain_depth = 1
     checkpoint["provenance"] = {
         "source_path": str(source),
         "source_sha256": source_sha256,
         "generated_at": timestamp,
         "profile": args.profile,
+        "source_kind": infer_source_kind(source),
         "keep_last_turns": args.keep_last_turns,
         "max_replacement_records": args.max_replacement_records,
         "source_line_count": original_line_count,
         "compacted_turn_count": len(old_turns),
         "compacted_record_count": old_record_count,
         "replacement_history_count": len(replacement_history),
+        "ancestor_depth": parent_chain_depth,
         "tool": "compact_codex_session.py",
     }
     checkpoint_message = format_checkpoint_message(checkpoint, summary)
@@ -801,19 +812,24 @@ def main() -> int:
     compacted_validation = validate_jsonl(compacted_copy)
     jq_ok = validate_with_jq(compacted_copy)
     compacted_bytes = compacted_copy.read_bytes()
+    compacted_sha256 = sha256_bytes(compacted_bytes)
+    generated_at = transformed[-1].get("timestamp") if transformed else None
+    manifest_path = output_root / "manifests" / rel.with_suffix(".manifest.json")
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
     report = {
         "source": str(source),
         "original_copy": str(original_copy),
         "compacted_copy": str(compacted_copy),
         "original_sha256": original_sha256,
-        "compacted_sha256": sha256_bytes(compacted_bytes),
+        "compacted_sha256": compacted_sha256,
         "original_bytes": len(original_bytes),
         "compacted_bytes": len(compacted_bytes),
         "bytes_saved": len(original_bytes) - len(compacted_bytes),
         "original_lines": original_validation["line_count"],
         "compacted_lines": compacted_validation["line_count"],
         "jq_valid": jq_ok,
+        "manifest_path": str(manifest_path),
         "changes": state,
         "policy": {
             "profile": args.profile,
@@ -830,7 +846,24 @@ def main() -> int:
     if checkpoint_preview is not None:
         report["checkpoint_preview"] = checkpoint_preview
 
+    manifest = build_compaction_manifest(
+        source=source,
+        original_copy=original_copy,
+        compacted_copy=compacted_copy,
+        report_path=report_path,
+        source_sha256=original_sha256,
+        compacted_sha256=compacted_sha256,
+        profile=args.profile,
+        generated_at=generated_at,
+        original_lines=original_validation["line_count"],
+        compacted_lines=compacted_validation["line_count"],
+        bytes_saved=len(original_bytes) - len(compacted_bytes),
+        keep_last_turns=args.keep_last_turns,
+        max_replacement_records=args.max_replacement_records,
+    )
+
     report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2, ensure_ascii=False))
     return 0
 

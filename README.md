@@ -21,6 +21,8 @@ It supports two profiles:
 
 - `compact_codex_session.py`
   - main compactor
+- `lineage.py`
+  - provenance and parent/child lineage helpers
 - `reproduce_codex_session_profiles.sh`
   - runs `safe` and `resume` from the same frozen snapshot
 - `CODEX_COMPACTION.md`
@@ -39,6 +41,22 @@ Known limitations:
 - no standalone packaging yet
 - no swap/resume automation yet
 
+## Lineage
+
+The repo now emits a per-run manifest and preserves parent/child provenance.
+
+Current model:
+
+- original live session or frozen snapshot = parent
+- compacted output = child
+- manifests record:
+  - source path
+  - source hash
+  - profile
+  - artifact paths
+  - parent provenance
+  - ancestor depth
+
 ## Why this exists
 
 Long coding-agent sessions accumulate a lot of low-value bulk:
@@ -54,4 +72,3 @@ The goal is to reduce that bulk while preserving what matters for continuation:
 - constraints
 - tool outcomes
 - current task state
-
