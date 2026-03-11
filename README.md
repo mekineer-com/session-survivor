@@ -23,6 +23,17 @@ It also supports:
   - prints the current file's checkpoint provenance and parent-chain view
   - useful for verifying derived-session relationships
 
+Claude support:
+
+- `compact_claude_session.py`
+  - separate conservative adapter for Claude JSONL
+  - currently `safe` only
+  - trims obvious bulk like:
+    - `thinking.signature`
+    - long `tool_result` content
+    - large `toolUseResult.*` string fields
+    - oversized `system/local_command` content
+
 ## Files
 
 - `compact_codex_session.py`
