@@ -73,6 +73,20 @@ def lineage_chain(path: pathlib.Path, max_depth: int = 8) -> list[dict[str, Any]
     return chain
 
 
+def describe_lineage(path: pathlib.Path, max_depth: int = 8) -> dict[str, Any]:
+    resolved = path.expanduser().resolve()
+    provenance = extract_checkpoint_provenance(resolved)
+    chain = lineage_chain(resolved, max_depth=max_depth)
+    return {
+        "path": str(resolved),
+        "kind": infer_source_kind(resolved),
+        "has_checkpoint_provenance": provenance is not None,
+        "checkpoint_provenance": provenance,
+        "ancestor_depth": len(chain),
+        "chain": chain,
+    }
+
+
 def build_compaction_manifest(
     *,
     source: pathlib.Path,

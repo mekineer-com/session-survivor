@@ -17,6 +17,12 @@ It supports two profiles:
   - keeps recent turns intact
   - experimental
 
+It also supports:
+
+- `--show-lineage`
+  - prints the current file's checkpoint provenance and parent-chain view
+  - useful for verifying derived-session relationships
+
 ## Files
 
 - `compact_codex_session.py`

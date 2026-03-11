@@ -11,7 +11,12 @@ import subprocess
 import sys
 import uuid
 
-from lineage import build_compaction_manifest, extract_checkpoint_provenance, infer_source_kind
+from lineage import (
+    build_compaction_manifest,
+    describe_lineage,
+    extract_checkpoint_provenance,
+    infer_source_kind,
+)
 
 
 SESSION_ROOT = pathlib.Path.home() / ".codex" / "sessions"
@@ -147,6 +152,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=24,
         help="Maximum message records to preserve inside synthetic compacted replacement_history.",
+    )
+    parser.add_argument(
+        "--show-lineage",
+        action="store_true",
+        help="Print lineage/provenance information for the input session and exit.",
     )
     return parser.parse_args()
 
@@ -750,6 +760,10 @@ def main() -> int:
 
     if not source.exists():
         raise SystemExit(f"Session file not found: {source}")
+
+    if args.show_lineage:
+        print(json.dumps(describe_lineage(source), indent=2, ensure_ascii=False))
+        return 0
 
     output_root = pathlib.Path(args.output_root).expanduser().resolve()
     rel = relative_session_path(source)
