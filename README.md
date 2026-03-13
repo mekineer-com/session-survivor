@@ -99,6 +99,17 @@ python3 compact_claude_session.py /path/to/claude.jsonl
 - emits per-run manifest data
 - still experimental
 
+Observed runtime behavior:
+
+- on very long live Codex sessions, native background compaction can sometimes raise the "context remaining" meter much more than expected
+- in one real session, the jump was on the order of ~50%, whereas earlier background jumps had usually been much smaller
+- do not interpret that as proof of a magically larger true context window
+- the safer explanation is that the live context became much more compressible:
+  - more native `compacted` / `context_compacted` history already in the rollout
+  - less irreducible hot-state baggage
+  - better external anchors like a shorter handoff file
+- trust the jump directionally, not literally; the real test is whether factual continuity still holds after the jump
+
 ### Claude
 
 Current `safe` trimming targets:
