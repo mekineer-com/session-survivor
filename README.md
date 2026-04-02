@@ -67,6 +67,11 @@ python3 compact_codex_session.py --profile resume /path/to/codex.jsonl
 python3 compact_claude_session.py /path/to/claude.jsonl
 ```
 
+Thread marker (Codex):
+
+- When `CODEX_THREAD_ID` is present, `compact_codex_session.py` appends a marker line to `~/.codex/session-survivor/thread-markers.jsonl`.
+- This gives a deterministic artifact that a specific Codex thread was compacted.
+
 ## What each script does
 
 - `compact_codex_session.py`

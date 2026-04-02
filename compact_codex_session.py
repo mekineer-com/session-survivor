@@ -4,6 +4,7 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -748,6 +749,31 @@ def relative_session_path(path: pathlib.Path) -> pathlib.Path:
         return pathlib.Path(path.name)
 
 
+def write_thread_marker(
+    source: pathlib.Path,
+    compacted_copy: pathlib.Path,
+    report_path: pathlib.Path,
+    manifest_path: pathlib.Path,
+    profile: str,
+) -> pathlib.Path | None:
+    thread_id = os.environ.get("CODEX_THREAD_ID")
+    if not thread_id:
+        return None
+    marker_path = pathlib.Path.home() / ".codex" / "session-survivor" / "thread-markers.jsonl"
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker = {
+        "thread_id": thread_id,
+        "profile": profile,
+        "source": str(source),
+        "compacted_copy": str(compacted_copy),
+        "report_path": str(report_path),
+        "manifest_path": str(manifest_path),
+    }
+    with marker_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(marker, ensure_ascii=False, separators=(",", ":")) + "\n")
+    return marker_path
+
+
 def main() -> int:
     args = parse_args()
     apply_profile_defaults(args)
@@ -878,6 +904,15 @@ def main() -> int:
 
     report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    marker_path = write_thread_marker(
+        source=source,
+        compacted_copy=compacted_copy,
+        report_path=report_path,
+        manifest_path=manifest_path,
+        profile=args.profile,
+    )
+    if marker_path is not None:
+        report["thread_marker_path"] = str(marker_path)
     print(json.dumps(report, indent=2, ensure_ascii=False))
     return 0
 
