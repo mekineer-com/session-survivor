@@ -7,8 +7,6 @@ import json
 import os
 import pathlib
 import re
-import shutil
-import subprocess
 import sys
 
 from lineage import (
@@ -324,60 +322,30 @@ def extract_tool_output_summary(text: str) -> str:
     return ""
 
 
-def record_text(obj: dict) -> str:
-    if obj.get("type") == "response_item":
-        payload = obj.get("payload", {})
-        payload_type = payload.get("type")
-        if payload_type == "message":
-            return message_text_from_payload(payload)
-        if payload_type == "function_call":
-            return f"{payload.get('name', '')} {payload.get('arguments', '')}"
-        if payload_type in ("function_call_output", "custom_tool_call_output"):
-            return str(payload.get("output") or "")
-        if payload_type == "custom_tool_call":
-            return f"{payload.get('name', '')} {payload.get('input', '')}"
-    if obj.get("type") == "event_msg":
-        return str(obj.get("payload", {}).get("message") or obj.get("payload", {}).get("text") or "")
-    if obj.get("type") == "compacted":
-        payload = obj.get("payload", {})
-        text = str(payload.get("message") or "")
-        if text:
-            return text
-    return ""
-
-
-def score_record(obj: dict, context_terms: set[str]) -> tuple[int, set[str]]:
-    text = record_text(obj)
+def score_message_payload(payload: dict, context_terms: set[str]) -> tuple[int, set[str]]:
+    text = message_text_from_payload(payload)
     tokens = set(tokenize(text))
     overlap = tokens & context_terms
     score = min(len(overlap), 10) * 4
-
-    if obj.get("type") == "response_item":
-        payload = obj.get("payload", {})
-        payload_type = payload.get("type")
-        role = payload.get("role")
-        if payload_type == "message" and role == "user":
+    role = payload.get("role")
+    if role == "user":
+        score += 30
+        if contains_any(text, GOAL_HINTS):
             score += 30
-            if contains_any(text, GOAL_HINTS):
-                score += 30
-            if contains_any(text, CONSTRAINT_HINTS):
-                score += 40
-        elif payload_type == "message" and role == "assistant":
+        if contains_any(text, CONSTRAINT_HINTS):
+            score += 40
+    elif role == "assistant":
+        score += 20
+        if contains_any(text, RESULT_HINTS):
+            score += 35
+        if contains_any(text, RISK_HINTS):
+            score += 25
+        if contains_any(text, STATE_HINTS):
             score += 20
-            if contains_any(text, RESULT_HINTS):
-                score += 35
-            if contains_any(text, RISK_HINTS):
-                score += 25
-            if contains_any(text, STATE_HINTS):
-                score += 20
-            if contains_any(text, NEXT_HINTS):
-                score += 10
-            if contains_any(text, PROGRESS_HINTS):
-                score -= 30
-        elif payload_type in ("function_call_output", "custom_tool_call_output", "reasoning"):
-            score -= 25
-        elif payload_type in ("function_call", "custom_tool_call"):
-            score -= 10
+        if contains_any(text, NEXT_HINTS):
+            score += 10
+        if contains_any(text, PROGRESS_HINTS):
+            score -= 30
 
     for pattern in SIGNAL_PATTERNS:
         if pattern.search(text):
@@ -420,7 +388,7 @@ def selected_replacement_history(old_turns: list[list[dict]], context_terms: set
             if payload.get("type") != "message":
                 continue
             role = payload.get("role")
-            score, overlap = score_record(obj, context_terms)
+            score, overlap = score_message_payload(payload, context_terms)
             if role == "user" and first_user is None:
                 first_user = copy.deepcopy(payload)
             if role == "assistant":
@@ -428,13 +396,11 @@ def selected_replacement_history(old_turns: list[list[dict]], context_terms: set
             if score >= 40:
                 important.append((score + recency_bonus, copy.deepcopy(payload), overlap))
         if first_user is not None:
-            first_user_obj = {"type": "response_item", "payload": first_user}
-            score, overlap = score_record(first_user_obj, context_terms)
+            score, overlap = score_message_payload(first_user, context_terms)
             if score + recency_bonus >= 45:
                 scored.append((max(score, 25) + recency_bonus, turn_idx, len(scored), first_user, overlap))
         if last_assistant is not None:
-            as_obj = {"type": "response_item", "payload": last_assistant}
-            score, overlap = score_record(as_obj, context_terms)
+            score, overlap = score_message_payload(last_assistant, context_terms)
             if score + recency_bonus >= 45:
                 scored.append((max(score, 30) + recency_bonus, turn_idx, len(scored), last_assistant, overlap))
         for score, payload, overlap in important:
@@ -507,7 +473,7 @@ def extract_checkpoint(old_turns: list[list[dict]], context_terms: set[str], top
                 snippet = short_snippet(text)
                 if not snippet:
                     continue
-                score, overlap = score_record(obj, context_terms)
+                score, overlap = score_message_payload(payload, context_terms)
                 overlap_signal = bool(overlap)
 
                 if role == "user":
@@ -746,19 +712,6 @@ def validate_jsonl_bytes(data: bytes) -> dict[str, int]:
     return {"line_count": line_count}
 
 
-def validate_with_jq(path: pathlib.Path) -> bool:
-    jq = shutil.which("jq")
-    if not jq:
-        return False
-    result = subprocess.run(
-        [jq, "-c", ".", str(path)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    return result.returncode == 0
-
-
 def relative_session_path(path: pathlib.Path) -> pathlib.Path:
     try:
         return path.resolve().relative_to(SESSION_ROOT.resolve())
@@ -778,14 +731,14 @@ def write_thread_marker(
     if not thread_id:
         return None
     marker_path = pathlib.Path.home() / ".codex" / "session-survivor" / "thread-markers.jsonl"
+    marker_key_dir = pathlib.Path.home() / ".codex" / "session-survivor" / "thread-marker-keys"
     marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_key_dir.mkdir(parents=True, exist_ok=True)
     dedup_key = f"{thread_id}:{source_sha256}:{profile}"
-    if marker_path.exists():
-        with marker_path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                existing = json.loads(line)
-                if existing.get("dedup_key") == dedup_key:
-                    return marker_path
+    key_hash = hashlib.sha256(dedup_key.encode("utf-8")).hexdigest()
+    key_path = marker_key_dir / key_hash
+    if key_path.exists():
+        return marker_path
     marker = {
         "dedup_key": dedup_key,
         "thread_id": thread_id,
@@ -798,6 +751,7 @@ def write_thread_marker(
     }
     with marker_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(marker, ensure_ascii=False, separators=(",", ":")) + "\n")
+    key_path.write_text(dedup_key + "\n", encoding="utf-8")
     return marker_path
 
 
@@ -877,7 +831,6 @@ def main() -> int:
             dst.write(json.dumps(compacted, ensure_ascii=False, separators=(",", ":")) + "\n")
 
     compacted_validation = validate_jsonl(compacted_copy)
-    jq_ok = validate_with_jq(compacted_copy)
     compacted_bytes = compacted_copy.read_bytes()
     compacted_sha256 = sha256_bytes(compacted_bytes)
     generated_at = transformed[-1].get("timestamp") if transformed else None
@@ -895,7 +848,6 @@ def main() -> int:
         "bytes_saved": len(original_bytes) - len(compacted_bytes),
         "original_lines": original_validation["line_count"],
         "compacted_lines": compacted_validation["line_count"],
-        "jq_valid": jq_ok,
         "manifest_path": str(manifest_path),
         "changes": state,
         "policy": {
