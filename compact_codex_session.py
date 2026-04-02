@@ -37,6 +37,10 @@ STOPWORDS = {
     "them", "then", "there", "they", "this", "turn", "used", "user", "using", "want",
     "what", "when", "will", "with", "work", "your", "changed",
 }
+TOPIC_STOPWORDS = STOPWORDS | {
+    "background", "behavior", "before", "cache", "content", "core", "default", "directly", "extension", "first", "live",
+    "message", "messages", "path",
+}
 SIGNAL_PATTERNS = (
     re.compile(r"\b[0-9a-f]{7,40}\b"),
     re.compile(r"\b(pushed|commit|committed|failed|passed|verified|risk|pending|phase|fix|fixed)\b", re.I),
@@ -209,7 +213,15 @@ def default_context_files() -> list[pathlib.Path]:
 
 
 def tokenize(text: str) -> list[str]:
-    return [tok for tok in re.findall(r"[A-Za-z0-9_./-]{4,}", text.lower()) if tok not in STOPWORDS]
+    tokens: list[str] = []
+    for raw in re.findall(r"[A-Za-z0-9_./-]{4,}", text.lower()):
+        tok = raw.strip("._-/")
+        if len(tok) < 4:
+            continue
+        if tok in STOPWORDS:
+            continue
+        tokens.append(tok)
+    return tokens
 
 
 def load_context_terms() -> set[str]:
@@ -259,16 +271,6 @@ def short_snippet(text: str, max_chars: int = SNIPPET_MAX_CHARS) -> str:
 def contains_any(text: str, phrases: tuple[str, ...]) -> bool:
     lower = text.lower()
     return any(phrase in lower for phrase in phrases)
-
-
-def append_unique(items: list[str], value: str, *, max_items: int) -> None:
-    if not value:
-        return
-    if value in items:
-        return
-    if len(items) >= max_items:
-        return
-    items.append(value)
 
 
 def looks_codey(text: str) -> bool:
@@ -451,9 +453,13 @@ def selected_replacement_history(old_turns: list[list[dict]], context_terms: set
         seen_serialized.add(serial)
         chosen.append(payload)
         for term in overlap:
+            if term in TOPIC_STOPWORDS:
+                continue
             topic_counts[term] = topic_counts.get(term, 0) + 1
 
-    topics = [term for term, _count in sorted(topic_counts.items(), key=lambda item: (-item[1], item[0]))[:8]]
+    ranked_topics = sorted(topic_counts.items(), key=lambda item: (-item[1], item[0]))
+    strong_topics = [term for term, count in ranked_topics if count >= 2]
+    topics = (strong_topics or [term for term, _count in ranked_topics])[:8]
     return chosen, topics
 
 
@@ -475,6 +481,14 @@ def extract_checkpoint(old_turns: list[list[dict]], context_terms: set[str], top
     task_state = checkpoint["task_state"]
     risks = checkpoint["risks"]
     next_actions = checkpoint["next_actions"]
+
+    seen_snippets: set[str] = set()
+
+    def append_checkpoint(items: list[str], value: str, max_items: int) -> None:
+        if not value or value in seen_snippets or len(items) >= max_items:
+            return
+        items.append(value)
+        seen_snippets.add(value)
 
     state_candidates: list[str] = []
 
@@ -500,25 +514,25 @@ def extract_checkpoint(old_turns: list[list[dict]], context_terms: set[str], top
                     if text.startswith(AGENTS_PREFIX):
                         continue
                     if contains_any(snippet, CONSTRAINT_HINTS):
-                        append_unique(constraints, snippet, max_items=8)
+                        append_checkpoint(constraints, snippet, max_items=8)
                     elif contains_any(snippet, GOAL_HINTS) or overlap_signal:
-                        append_unique(goals, snippet, max_items=8)
+                        append_checkpoint(goals, snippet, max_items=8)
                     if contains_any(snippet, NEXT_HINTS):
-                        append_unique(next_actions, snippet, max_items=8)
+                        append_checkpoint(next_actions, snippet, max_items=8)
 
                 elif role == "assistant":
                     if contains_any(snippet, PROGRESS_HINTS):
                         if contains_any(snippet, NEXT_HINTS):
-                            append_unique(next_actions, snippet, max_items=8)
+                            append_checkpoint(next_actions, snippet, max_items=8)
                         continue
                     if contains_any(snippet, TOOL_RESULT_HINTS):
-                        append_unique(tool_results, snippet, max_items=8)
+                        append_checkpoint(tool_results, snippet, max_items=8)
                     if contains_any(snippet, RISK_HINTS):
-                        append_unique(risks, snippet, max_items=8)
+                        append_checkpoint(risks, snippet, max_items=8)
                     if contains_any(snippet, NEXT_HINTS):
-                        append_unique(next_actions, snippet, max_items=8)
+                        append_checkpoint(next_actions, snippet, max_items=8)
                     if contains_any(snippet, STATE_HINTS) or contains_any(snippet, RESULT_HINTS) or (score >= 40 and overlap_signal):
-                        append_unique(task_state, snippet, max_items=8)
+                        append_checkpoint(task_state, snippet, max_items=8)
                     elif score >= 30:
                         state_candidates.append(snippet)
 
@@ -529,11 +543,11 @@ def extract_checkpoint(old_turns: list[list[dict]], context_terms: set[str], top
                     or contains_any(summary, RISK_HINTS)
                     or any(pattern.search(summary) for pattern in SIGNAL_PATTERNS)
                 ):
-                    append_unique(tool_results, summary, max_items=8)
+                    append_checkpoint(tool_results, summary, max_items=8)
 
     if not task_state:
         for snippet in reversed(state_candidates):
-            append_unique(task_state, snippet, max_items=6)
+            append_checkpoint(task_state, snippet, max_items=6)
 
     return checkpoint
 
@@ -831,7 +845,6 @@ def main() -> int:
     }
 
     records = [json.loads(line) for line in original_bytes.splitlines()]
-    context_terms = load_context_terms()
 
     if args.emit_compacted_spans:
         header, turns = split_session_objects(records)
@@ -839,6 +852,7 @@ def main() -> int:
         if len(turns) > args.keep_last_turns:
             old_turns = turns[:-args.keep_last_turns]
             recent_turns = turns[-args.keep_last_turns:]
+            context_terms = load_context_terms()
             transformed.extend(
                 synthetic_compacted_turn(
                     old_turns,
