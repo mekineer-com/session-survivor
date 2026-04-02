@@ -10,7 +10,6 @@ import re
 import shutil
 import subprocess
 import sys
-import uuid
 
 from lineage import (
     build_compaction_manifest,
@@ -582,8 +581,12 @@ def synthetic_compacted_turn(
     replacement_history, topics = selected_replacement_history(old_turns, context_terms, args.max_replacement_records)
     last_obj = old_turns[-1][-1]
     timestamp = str(last_obj.get("timestamp") or "")
-    turn_id = f"semantic-compacted-{uuid.uuid4()}"
     old_record_count = sum(len(turn) for turn in old_turns)
+    turn_id_seed = (
+        f"{source_sha256}:{args.profile}:{len(old_turns)}:{old_record_count}:"
+        f"{args.keep_last_turns}:{args.max_replacement_records}"
+    )
+    turn_id = "semantic-compacted-" + hashlib.sha256(turn_id_seed.encode("utf-8")).hexdigest()[:16]
     summary = (
         f"Compacted {len(old_turns)} older turns ({old_record_count} records). "
         f"Preserved {len(replacement_history)} high-value message records."
@@ -755,15 +758,25 @@ def write_thread_marker(
     report_path: pathlib.Path,
     manifest_path: pathlib.Path,
     profile: str,
+    source_sha256: str,
 ) -> pathlib.Path | None:
     thread_id = os.environ.get("CODEX_THREAD_ID")
     if not thread_id:
         return None
     marker_path = pathlib.Path.home() / ".codex" / "session-survivor" / "thread-markers.jsonl"
     marker_path.parent.mkdir(parents=True, exist_ok=True)
+    dedup_key = f"{thread_id}:{source_sha256}:{profile}"
+    if marker_path.exists():
+        with marker_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                existing = json.loads(line)
+                if existing.get("dedup_key") == dedup_key:
+                    return marker_path
     marker = {
+        "dedup_key": dedup_key,
         "thread_id": thread_id,
         "profile": profile,
+        "source_sha256": source_sha256,
         "source": str(source),
         "compacted_copy": str(compacted_copy),
         "report_path": str(report_path),
@@ -902,7 +915,6 @@ def main() -> int:
         max_replacement_records=args.max_replacement_records,
     )
 
-    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     marker_path = write_thread_marker(
         source=source,
@@ -910,9 +922,11 @@ def main() -> int:
         report_path=report_path,
         manifest_path=manifest_path,
         profile=args.profile,
+        source_sha256=original_sha256,
     )
     if marker_path is not None:
         report["thread_marker_path"] = str(marker_path)
+    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2, ensure_ascii=False))
     return 0
 

@@ -71,6 +71,8 @@ Thread marker (Codex):
 
 - When `CODEX_THREAD_ID` is present, `compact_codex_session.py` appends a marker line to `~/.codex/session-survivor/thread-markers.jsonl`.
 - This gives a deterministic artifact that a specific Codex thread was compacted.
+- Marker writes are de-duped by `thread_id + source_sha256 + profile`.
+- In `resume` profile, synthetic compacted turn IDs are deterministic for same input/options.
 
 ## What each script does
 
