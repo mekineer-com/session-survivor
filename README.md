@@ -4,7 +4,7 @@ Tools for compacting and continuing long AI agent sessions.
 
 ## Status
 
-This repo is a working prototype, not a packaged release.
+This repo is actively used script tooling, not a packaged release.
 
 Current support:
 
@@ -14,6 +14,7 @@ Current support:
   - `--show-lineage`
 - Claude JSONL
   - `safe`
+  - `--show-summary`
   - `--show-lineage`
 
 Current non-goals:
@@ -73,6 +74,8 @@ Thread marker (Codex):
 - This gives a deterministic artifact that a specific Codex thread was compacted.
 - Marker writes are de-duped by `thread_id + source_sha256 + profile`.
 - In `resume` profile, synthetic compacted turn IDs are deterministic for same input/options.
+- Report compatibility alias: top-level `profile` is emitted (mirrors `policy.profile`).
+- Format-drift warnings: when core Codex record shapes are missing, warnings are emitted to stderr and included as `warnings[]` in the report.
 
 ## What each script does
 
@@ -81,7 +84,7 @@ Thread marker (Codex):
   - supports `safe`, `resume`, and `--show-lineage`
 - `compact_claude_session.py`
   - conservative Claude compactor
-  - currently `safe` only
+  - currently `safe` only, plus `--show-summary` and `--show-lineage`
 - `lineage.py`
   - provenance and parent/child session lineage helpers
 - `reproduce_codex_session_profiles.sh`
@@ -104,7 +107,7 @@ Thread marker (Codex):
 - collapses older history into a checkpointed compacted span
 - keeps recent turns intact
 - emits per-run manifest data
-- still experimental
+- intended for continuation on already-warm sessions
 
 Observed runtime behavior:
 
@@ -142,6 +145,13 @@ Per-run manifests record:
 - artifact paths
 - parent provenance
 - ancestor depth
+
+Session chaining (what this means):
+
+- each compacted Codex output includes a checkpoint provenance block (source path/hash/profile/time)
+- if you compact that compacted output again, the new file becomes the next child in the chain
+- `--show-lineage` follows those links backward so you can see ancestry from newest output to original source
+- this gives an audit trail for multi-step compact/continue workflows instead of opaque one-off rewrites
 
 ## Files
 

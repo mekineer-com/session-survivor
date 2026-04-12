@@ -374,6 +374,37 @@ def split_session_objects(records: list[dict]) -> tuple[list[dict], list[list[di
     return header, turns
 
 
+def core_format_warnings(records: list[dict]) -> list[str]:
+    has_event_msg = False
+    has_task_started = False
+    has_response_item = False
+    has_message_item = False
+
+    for obj in records:
+        item_type = obj.get("type")
+        if item_type == "event_msg":
+            has_event_msg = True
+            payload = obj.get("payload")
+            if isinstance(payload, dict) and payload.get("type") == "task_started":
+                has_task_started = True
+        elif item_type == "response_item":
+            has_response_item = True
+            payload = obj.get("payload")
+            if isinstance(payload, dict) and payload.get("type") == "message":
+                has_message_item = True
+
+    warnings: list[str] = []
+    if not has_event_msg:
+        warnings.append("Missing top-level type=event_msg records (possible Codex format drift).")
+    if not has_task_started:
+        warnings.append("Missing event_msg payload.type=task_started records (turn boundary parsing may degrade).")
+    if not has_response_item:
+        warnings.append("Missing top-level type=response_item records (message/tool compaction may degrade).")
+    if not has_message_item:
+        warnings.append("Missing response_item payload.type=message records (semantic scoring/checkpoint quality may degrade).")
+    return warnings
+
+
 def selected_replacement_history(old_turns: list[list[dict]], context_terms: set[str], max_records: int) -> tuple[list[dict], list[str]]:
     scored: list[tuple[int, int, int, dict, set[str]]] = []
     total_turns = max(len(old_turns), 1)
@@ -853,6 +884,9 @@ def main() -> int:
     }
 
     records = [json.loads(line) for line in original_bytes.splitlines()]
+    format_warnings = core_format_warnings(records)
+    for warning in format_warnings:
+        print(f"WARNING: {warning}", file=sys.stderr)
 
     if args.emit_compacted_spans:
         header, turns = split_session_objects(records)
@@ -893,6 +927,7 @@ def main() -> int:
 
     report = {
         "source": str(source),
+        "profile": args.profile,
         "original_copy": str(original_copy),
         "compacted_copy": str(compacted_copy),
         "original_sha256": original_sha256,
@@ -915,6 +950,8 @@ def main() -> int:
             "duplicate_instruction_placeholder": AGENTS_PLACEHOLDER,
         },
     }
+    if format_warnings:
+        report["warnings"] = format_warnings
     checkpoint_preview = extract_checkpoint_preview(transformed)
     if checkpoint_preview is not None:
         report["checkpoint_preview"] = checkpoint_preview
