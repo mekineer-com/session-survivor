@@ -6,6 +6,7 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -17,8 +18,8 @@ from lineage import build_compaction_manifest, describe_lineage
 
 DEFAULT_OUTPUT_ROOT = pathlib.Path("/home/marcos/apps-codex/session-survivor/outputs/claude")
 TOOL_OUTPUT_PLACEHOLDER = "[Compacted Claude tool result"
-THINKING_PLACEHOLDER = "[Compacted Claude thinking"
 LOCAL_COMMAND_PLACEHOLDER = "[Compacted Claude local command"
+FILE_HISTORY_PLACEHOLDER = "[Compacted Claude file history"
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,10 +39,10 @@ def parse_args() -> argparse.Namespace:
         help="Keep at most this many chars of bulky tool-result or toolUseResult fields.",
     )
     parser.add_argument(
-        "--max-thinking-chars",
+        "--max-file-history-entries",
         type=int,
-        default=240,
-        help="Keep at most this many chars of Claude thinking text.",
+        default=8,
+        help="Keep at most this many tracked file backups per file-history snapshot.",
     )
     parser.add_argument(
         "--show-summary",
@@ -60,7 +61,17 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def is_existing_compaction_placeholder(text: str) -> bool:
+    return (
+        "\n... [Compacted Claude" in text
+        and "; original length=" in text
+        and text.rstrip().endswith(" chars]")
+    )
+
+
 def shorten(text: str, max_chars: int, label: str) -> tuple[str, bool]:
+    if is_existing_compaction_placeholder(text):
+        return text, False
     if len(text) <= max_chars:
         return text, False
     kept = text[:max_chars].rstrip()
@@ -104,35 +115,102 @@ def relative_output_path(path: pathlib.Path) -> pathlib.Path:
     return pathlib.Path(path.name)
 
 
-def compact_tool_use_result(value: Any, max_chars: int, state: dict[str, int]) -> Any:
-    if not isinstance(value, dict):
-        return value
-    result = copy.deepcopy(value)
-    for key, field in list(result.items()):
-        if not isinstance(field, str):
-            continue
-        compacted, changed = shorten(field, max_chars, TOOL_OUTPUT_PLACEHOLDER)
+def write_thread_marker(
+    source: pathlib.Path,
+    compacted_copy: pathlib.Path,
+    report_path: pathlib.Path,
+    manifest_path: pathlib.Path,
+    profile: str,
+    source_sha256: str,
+) -> pathlib.Path:
+    marker_root = pathlib.Path.home() / ".claude" / "session-survivor"
+    marker_path = marker_root / "thread-markers.jsonl"
+    marker_key_dir = marker_root / "thread-marker-keys"
+    marker_root.mkdir(parents=True, exist_ok=True)
+    marker_key_dir.mkdir(parents=True, exist_ok=True)
+
+    session_id = source.stem
+    dedup_key = f"{session_id}:{source_sha256}:{profile}"
+    key_hash = hashlib.sha256(dedup_key.encode("utf-8")).hexdigest()
+    key_path = marker_key_dir / key_hash
+    if key_path.exists():
+        return marker_path
+
+    marker = {
+        "dedup_key": dedup_key,
+        "session_id": session_id,
+        "profile": profile,
+        "source_sha256": source_sha256,
+        "source": str(source),
+        "compacted_copy": str(compacted_copy),
+        "report_path": str(report_path),
+        "manifest_path": str(manifest_path),
+        "host": os.uname().nodename,
+    }
+    with marker_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(marker, ensure_ascii=False, separators=(",", ":")) + "\n")
+    key_path.write_text(dedup_key + "\n", encoding="utf-8")
+    return marker_path
+
+
+def compact_nested_strings(value: Any, max_chars: int, label: str, state: dict[str, int], counter_key: str) -> Any:
+    if isinstance(value, str):
+        compacted, changed = shorten(value, max_chars, label)
         if changed:
-            result[key] = compacted
-            state["tool_outputs_truncated"] += 1
-    return result
+            state[counter_key] += 1
+        return compacted
+    if isinstance(value, list):
+        return [compact_nested_strings(v, max_chars, label, state, counter_key) for v in value]
+    if isinstance(value, dict):
+        return {k: compact_nested_strings(v, max_chars, label, state, counter_key) for k, v in value.items()}
+    return value
+
+
+def compact_tool_use_result(value: Any, max_chars: int, state: dict[str, int]) -> Any:
+    return compact_nested_strings(value, max_chars, TOOL_OUTPUT_PLACEHOLDER, state, "tool_outputs_truncated")
+
+
+def compact_file_history_snapshot(snapshot: Any, max_entries: int, state: dict[str, int]) -> Any:
+    if not isinstance(snapshot, dict):
+        return snapshot
+    out = copy.deepcopy(snapshot)
+    tracked = out.get("trackedFileBackups")
+    if not isinstance(tracked, dict):
+        return out
+
+    original_count = len(tracked)
+    if original_count <= max_entries:
+        return out
+
+    kept: dict[str, Any] = {}
+    for idx, (file_path, backup_meta) in enumerate(tracked.items()):
+        if idx >= max_entries:
+            break
+        if isinstance(backup_meta, dict):
+            minimal: dict[str, Any] = {}
+            if "version" in backup_meta:
+                minimal["version"] = backup_meta["version"]
+            if "backupTime" in backup_meta:
+                minimal["backupTime"] = backup_meta["backupTime"]
+            kept[file_path] = minimal if minimal else backup_meta
+        else:
+            kept[file_path] = backup_meta
+
+    out["trackedFileBackups"] = kept
+    out["trackedFileBackupsTruncated"] = {
+        "original_count": original_count,
+        "kept_count": len(kept),
+        "marker": FILE_HISTORY_PLACEHOLDER,
+    }
+    state["file_history_snapshots_compacted"] += 1
+    return out
 
 
 def compact_message_content(item: dict[str, Any], args: argparse.Namespace, state: dict[str, int]) -> dict[str, Any]:
     out = copy.deepcopy(item)
     item_type = out.get("type")
 
-    if item_type == "thinking":
-        if isinstance(out.get("signature"), str) and out["signature"]:
-            out["signature"] = ""
-            state["thinking_signatures_removed"] += 1
-        if isinstance(out.get("thinking"), str):
-            compacted, changed = shorten(out["thinking"], args.max_thinking_chars, THINKING_PLACEHOLDER)
-            out["thinking"] = compacted
-            if changed:
-                state["thinking_text_truncated"] += 1
-
-    elif item_type == "tool_result":
+    if item_type == "tool_result":
         content = out.get("content")
         if isinstance(content, str):
             compacted, changed = shorten(content, args.max_tool_output_chars, TOOL_OUTPUT_PLACEHOLDER)
@@ -152,15 +230,38 @@ def compact_record(obj: dict[str, Any], args: argparse.Namespace, state: dict[st
         if isinstance(message, dict):
             content = message.get("content")
             if isinstance(content, list):
-                message["content"] = [
-                    compact_message_content(entry, args, state) if isinstance(entry, dict) else entry
-                    for entry in content
-                ]
+                compacted_content: list[Any] = []
+                for entry in content:
+                    if isinstance(entry, dict) and entry.get("type") == "thinking":
+                        state["thinking_blocks_removed"] += 1
+                        continue
+                    if isinstance(entry, dict):
+                        compacted_content.append(compact_message_content(entry, args, state))
+                    else:
+                        compacted_content.append(entry)
+                message["content"] = compacted_content
             elif isinstance(content, str):
                 compacted, changed = shorten(content, args.max_tool_output_chars, TOOL_OUTPUT_PLACEHOLDER)
                 message["content"] = compacted
                 if changed:
                     state["message_content_truncated"] += 1
+
+            usage = message.get("usage")
+            if isinstance(usage, dict):
+                reduced = {
+                    k: usage[k]
+                    for k in (
+                        "input_tokens",
+                        "output_tokens",
+                        "cache_creation_input_tokens",
+                        "cache_read_input_tokens",
+                        "service_tier",
+                    )
+                    if k in usage
+                }
+                if reduced != usage:
+                    message["usage"] = reduced
+                    state["message_usage_compacted"] += 1
 
         if "toolUseResult" in item:
             item["toolUseResult"] = compact_tool_use_result(item.get("toolUseResult"), args.max_tool_output_chars, state)
@@ -172,6 +273,8 @@ def compact_record(obj: dict[str, Any], args: argparse.Namespace, state: dict[st
             item["content"] = compacted
             if changed:
                 state["local_command_truncated"] += 1
+    elif item_type == "file-history-snapshot":
+        item["snapshot"] = compact_file_history_snapshot(item.get("snapshot"), args.max_file_history_entries, state)
 
     return item
 
@@ -203,11 +306,12 @@ def main() -> int:
     original_validation = validate_jsonl_bytes(original_bytes)
 
     state = {
-        "thinking_signatures_removed": 0,
-        "thinking_text_truncated": 0,
+        "thinking_blocks_removed": 0,
         "tool_outputs_truncated": 0,
         "message_content_truncated": 0,
         "local_command_truncated": 0,
+        "message_usage_compacted": 0,
+        "file_history_snapshots_compacted": 0,
     }
 
     records = [json.loads(line) for line in original_bytes.splitlines()]
@@ -240,7 +344,8 @@ def main() -> int:
         "policy": {
             "profile": "safe",
             "max_tool_output_chars": args.max_tool_output_chars,
-            "max_thinking_chars": args.max_thinking_chars,
+            "max_file_history_entries": args.max_file_history_entries,
+            "strip_thinking_blocks": True,
         },
     }
 
@@ -260,8 +365,17 @@ def main() -> int:
         max_replacement_records=0,
     )
 
-    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    marker_path = write_thread_marker(
+        source=source,
+        compacted_copy=compacted_copy,
+        report_path=report_path,
+        manifest_path=manifest_path,
+        profile="claude-safe",
+        source_sha256=original_sha256,
+    )
+    report["thread_marker_path"] = str(marker_path)
+    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     if args.show_summary:
         print(
             json.dumps(

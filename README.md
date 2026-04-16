@@ -16,6 +16,10 @@ Current support:
   - `safe`
   - `--show-summary`
   - `--show-lineage`
+- Gemini JSON
+  - `safe`
+  - `--show-summary`
+  - `--show-lineage`
 
 Current non-goals:
 
@@ -66,13 +70,16 @@ Run one-off compaction directly:
 python3 compact_codex_session.py --profile safe /path/to/codex.jsonl
 python3 compact_codex_session.py --profile resume /path/to/codex.jsonl
 python3 compact_claude_session.py /path/to/claude.jsonl
+python3 compact_gemini_session.py /path/to/gemini-session.json
 ```
 
-Thread marker (Codex):
+Session markers:
 
-- When `CODEX_THREAD_ID` is present, `compact_codex_session.py` appends a marker line to `~/.codex/session-survivor/thread-markers.jsonl`.
-- This gives a deterministic artifact that a specific Codex thread was compacted.
-- Marker writes are de-duped by `thread_id + source_sha256 + profile`.
+- Codex: when `CODEX_THREAD_ID` is present, `compact_codex_session.py` appends a marker line to `~/.codex/session-survivor/thread-markers.jsonl`.
+- Claude: `compact_claude_session.py` appends markers to `~/.claude/session-survivor/thread-markers.jsonl`.
+- Gemini: `compact_gemini_session.py` appends markers to `~/.gemini/session-survivor/thread-markers.jsonl`.
+- Marker writes are de-duped by `{session_or_thread_id}:{source_sha256}:{profile}`.
+- Each report now includes `thread_marker_path`.
 - In `resume` profile, synthetic compacted turn IDs are deterministic for same input/options.
 - Report compatibility alias: top-level `profile` is emitted (mirrors `policy.profile`).
 - Format-drift warnings: when core Codex record shapes are missing, warnings are emitted to stderr and included as `warnings[]` in the report.
@@ -84,6 +91,9 @@ Thread marker (Codex):
   - supports `safe`, `resume`, and `--show-lineage`
 - `compact_claude_session.py`
   - conservative Claude compactor
+  - currently `safe` only, plus `--show-summary` and `--show-lineage`
+- `compact_gemini_session.py`
+  - conservative Gemini compactor
   - currently `safe` only, plus `--show-summary` and `--show-lineage`
 - `lineage.py`
   - provenance and parent/child session lineage helpers
@@ -163,11 +173,29 @@ Observed runtime behavior:
 
 Current `safe` trimming targets:
 
-- `thinking.signature`
+- remove all `thinking` blocks from `message.content` (avoids signed-thinking compaction failures)
 - long `tool_result` string content
-- large `toolUseResult.*` string fields
+- nested oversized strings anywhere inside `toolUseResult`
 - oversized plain string `message.content`
 - oversized `system/local_command` content
+- reduce `message.usage` to core counters/tier
+- compact oversized `file-history-snapshot.trackedFileBackups` maps to a bounded entry set + truncation metadata
+
+Post-swap hygiene for Claude sessions:
+
+- if the target session was already open while you swapped the JSONL, restart Claude before testing (`/exit` all Claude terminals, then relaunch) so it reloads the file from disk
+- Claude session discovery loads files that end with `.jsonl`; backup suffix variants like `*.jsonl.pre-*` and `*.jsonl.orig` are ignored
+- still move backups out of `~/.claude/projects` for hygiene and to avoid operator confusion
+
+### Gemini
+
+Current `safe` trimming targets:
+
+- oversized `messages[*].toolCalls[*].resultDisplay` text (including nested object forms like `originalContent` / `newContent`)
+- oversized nested string fields inside `messages[*].toolCalls[*].result`
+- oversized nested strings inside `messages[*].toolCalls[*].args`
+- oversized `messages[*].thoughts[*].description`
+- oversized `messages[*].content` (string and nested list/dict text) and `messages[*].displayContent`
 
 ## Lineage model
 
