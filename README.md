@@ -106,7 +106,10 @@ Session markers:
 
 If you want the Claude long-lived behavior from this project, set these hook entries in `~/.claude/settings.json`.
 
-Replace `path-to-project-root` with your local clone path (the folder that contains `HANDOFF.md` and `_tools/hooks/`):
+Use two path placeholders:
+
+- `path-to-project-root`: your active project root (where `HANDOFF.md` lives)
+- `path-to-session-survivor`: your local clone of this repo (where `_tools/hooks/` lives)
 
 ```json
 {
@@ -124,15 +127,24 @@ Replace `path-to-project-root` with your local clone path (the folder that conta
     ],
     "PreToolUse": [
       {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "path-to-session-survivor/_tools/hooks/claude-read-before-write-gate.sh"
+          }
+        ]
+      },
+      {
         "matcher": "Write|Edit",
         "hooks": [
           {
             "type": "command",
-            "command": "path-to-project-root/_tools/hooks/claude-read-before-write-gate.sh"
+            "command": "path-to-session-survivor/_tools/hooks/claude-read-before-write-gate.sh"
           },
           {
             "type": "command",
-            "command": "path-to-project-root/_tools/hooks/doc-backup.sh"
+            "command": "path-to-session-survivor/_tools/hooks/doc-backup.sh"
           }
         ]
       }
@@ -140,6 +152,12 @@ Replace `path-to-project-root` with your local clone path (the folder that conta
   }
 }
 ```
+
+Notes:
+
+- Merge these entries into your existing `hooks` object; do not overwrite unrelated hooks.
+- Optional: set `CLAUDE_READ_FRESHNESS_SECONDS` to tune read freshness window (default 3600).
+- Optional: set `DOC_BACKUP_ARCHIVE_DIR` to override backup destination; default is `path-to-session-survivor/_archive/doc-versions`.
 
 ## Current behavior
 
