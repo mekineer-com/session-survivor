@@ -92,6 +92,45 @@ Thread marker (Codex):
 - `reproduce_claude_safe.sh`
   - runs Claude `safe` against the latest JSONL in the active Claude project folder
 
+## Claude long-lived hook config (manual)
+
+If you want the Claude long-lived behavior from this project, set these hook entries in `~/.claude/settings.json`.
+
+Replace `path-to-project-root` with your local clone path (the folder that contains `HANDOFF.md` and `_tools/hooks/`):
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '--- Recent HANDOFF (post-compaction refresh) ---' && tail -30 path-to-project-root/HANDOFF.md"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "path-to-project-root/_tools/hooks/claude-read-before-write-gate.sh"
+          },
+          {
+            "type": "command",
+            "command": "path-to-project-root/_tools/hooks/doc-backup.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
 ## Current behavior
 
 ### Codex
