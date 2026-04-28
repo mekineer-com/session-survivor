@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -20,6 +21,13 @@ DEFAULT_OUTPUT_ROOT = pathlib.Path("/home/marcos/apps-codex/session-survivor/out
 TOOL_OUTPUT_PLACEHOLDER = "[Compacted Claude tool result"
 LOCAL_COMMAND_PLACEHOLDER = "[Compacted Claude local command"
 FILE_HISTORY_PLACEHOLDER = "[Compacted Claude file history"
+LINEAGE_TYPES = {
+    "progress",
+    "queue-operation",
+    "last-prompt",
+    "permission-mode",
+    "custom-title",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,6 +51,24 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=8,
         help="Keep at most this many tracked file backups per file-history snapshot.",
+    )
+    parser.add_argument(
+        "--warn-depth",
+        type=int,
+        default=8,
+        help="Warn when safe-on-safe compaction depth reaches this value.",
+    )
+    parser.add_argument(
+        "--max-depth",
+        type=int,
+        default=12,
+        help="Hard stop when safe-on-safe compaction depth reaches this value.",
+    )
+    parser.add_argument(
+        "--lineage-window",
+        type=int,
+        default=512,
+        help="Keep at most this many recent lineage/status records per lineage type.",
     )
     parser.add_argument(
         "--show-summary",
@@ -115,6 +141,42 @@ def relative_output_path(path: pathlib.Path) -> pathlib.Path:
     return pathlib.Path(path.name)
 
 
+def find_compacted_source_manifest(source: pathlib.Path) -> pathlib.Path | None:
+    parts = source.resolve().parts
+    if "compacted" not in parts:
+        return None
+    idx = parts.index("compacted")
+    root = pathlib.Path(*parts[:idx])
+    rel = pathlib.Path(*parts[idx + 1 :])
+    candidate = root / "manifests" / rel.with_suffix(".manifest.json")
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def read_safe_depth_from_manifest(manifest_path: pathlib.Path) -> int | None:
+    try:
+        obj = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    policy = obj.get("policy")
+    if isinstance(policy, dict):
+        depth = policy.get("safe_depth")
+        if isinstance(depth, int) and depth >= 0:
+            return depth
+    return None
+
+
+def compute_safe_depth(source: pathlib.Path) -> tuple[int, pathlib.Path | None]:
+    manifest_path = find_compacted_source_manifest(source)
+    if manifest_path is None:
+        return 0, None
+    prior_depth = read_safe_depth_from_manifest(manifest_path)
+    if prior_depth is None:
+        return 1, manifest_path
+    return prior_depth + 1, manifest_path
+
+
 def write_thread_marker(
     source: pathlib.Path,
     compacted_copy: pathlib.Path,
@@ -164,6 +226,91 @@ def compact_nested_strings(value: Any, max_chars: int, label: str, state: dict[s
     if isinstance(value, dict):
         return {k: compact_nested_strings(v, max_chars, label, state, counter_key) for k, v in value.items()}
     return value
+
+
+def canonical_lineage_signature(item: dict[str, Any]) -> str:
+    copy_item = copy.deepcopy(item)
+    copy_item.pop("timestamp", None)
+    copy_item.pop("uuid", None)
+    payload = json.dumps(copy_item, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def queue_tool_use_id(item: dict[str, Any]) -> str | None:
+    if item.get("type") != "queue-operation":
+        return None
+    content = item.get("content")
+    if not isinstance(content, str):
+        return None
+    match = re.search(r"<tool-use-id>([^<]+)</tool-use-id>", content)
+    if not match:
+        return None
+    return match.group(1).strip()
+
+
+def prune_stale_lineage(records: list[dict[str, Any]], args: argparse.Namespace, state: dict[str, int]) -> list[dict[str, Any]]:
+    kept_reversed: list[dict[str, Any]] = []
+    kept_by_type: dict[str, int] = {}
+    seen_signatures: dict[str, set[str]] = {}
+    seen_closed_queue_ids: set[str] = set()
+    kept_lineage_total = 0
+
+    for item in reversed(records):
+        item_type = item.get("type")
+        if item_type not in LINEAGE_TYPES:
+            kept_reversed.append(item)
+            continue
+
+        kept_count = kept_by_type.get(item_type, 0)
+        if kept_count >= args.lineage_window:
+            state["pruned_lineage_entries"] += 1
+            continue
+
+        if item_type == "queue-operation":
+            tool_id = queue_tool_use_id(item)
+            if tool_id:
+                if tool_id in seen_closed_queue_ids:
+                    state["pruned_lineage_entries"] += 1
+                    continue
+                seen_closed_queue_ids.add(tool_id)
+
+        signature = canonical_lineage_signature(item)
+        type_seen = seen_signatures.setdefault(item_type, set())
+        if signature in type_seen:
+            state["pruned_lineage_entries"] += 1
+            continue
+        type_seen.add(signature)
+
+        kept_by_type[item_type] = kept_count + 1
+        kept_lineage_total += 1
+        kept_reversed.append(item)
+
+    state["kept_lineage_entries"] = kept_lineage_total
+    return list(reversed(kept_reversed))
+
+
+def detect_project_root(records: list[dict[str, Any]]) -> pathlib.Path | None:
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        cwd = item.get("cwd")
+        if isinstance(cwd, str) and cwd.startswith("/"):
+            path = pathlib.Path(cwd).expanduser()
+            try:
+                return path.resolve()
+            except Exception:
+                return path
+    return None
+
+
+def anchor_digest(path: pathlib.Path) -> dict[str, Any]:
+    stat = path.stat()
+    data = path.read_bytes()
+    return {
+        "sha256": sha256_bytes(data),
+        "bytes": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+    }
 
 
 def compact_tool_use_result(value: Any, max_chars: int, state: dict[str, int]) -> Any:
@@ -281,6 +428,13 @@ def compact_record(obj: dict[str, Any], args: argparse.Namespace, state: dict[st
 
 def main() -> int:
     args = parse_args()
+    if args.warn_depth < 0 or args.max_depth < 0:
+        raise SystemExit("warn-depth and max-depth must be non-negative.")
+    if args.warn_depth >= args.max_depth:
+        raise SystemExit("warn-depth must be lower than max-depth.")
+    if args.lineage_window < 1:
+        raise SystemExit("lineage-window must be >= 1.")
+
     source = pathlib.Path(args.session).expanduser().resolve()
     if not source.exists():
         raise SystemExit(f"Session file not found: {source}")
@@ -288,6 +442,18 @@ def main() -> int:
     if args.show_lineage:
         print(json.dumps(describe_lineage(source), indent=2, ensure_ascii=False))
         return 0
+
+    safe_depth, parent_manifest_path = compute_safe_depth(source)
+    warnings: list[str] = []
+    if safe_depth >= args.max_depth:
+        raise SystemExit(
+            f"Claude safe compaction depth {safe_depth} reached max-depth {args.max_depth}. "
+            "Stop chaining compactions; start a fresh session from handover."
+        )
+    if safe_depth >= args.warn_depth:
+        warnings.append(
+            f"Claude safe compaction depth warning: depth={safe_depth} (warn={args.warn_depth}, max={args.max_depth})."
+        )
 
     output_root = pathlib.Path(args.output_root).expanduser().resolve()
     rel = relative_output_path(source)
@@ -312,10 +478,35 @@ def main() -> int:
         "local_command_truncated": 0,
         "message_usage_compacted": 0,
         "file_history_snapshots_compacted": 0,
+        "pruned_lineage_entries": 0,
+        "kept_lineage_entries": 0,
     }
 
     records = [json.loads(line) for line in original_bytes.splitlines()]
+    project_root = detect_project_root(records)
+
+    anchor_sources: dict[str, str] = {}
+    anchor_hashes: dict[str, dict[str, Any]] = {}
+    anchor_missing: list[str] = []
+    for name in ("AGENTS.md", "HANDOFF.md", "CLAUDE.md"):
+        if project_root is None:
+            anchor_missing.append(name)
+            continue
+        candidate = project_root / name
+        try:
+            resolved = candidate.resolve()
+        except Exception:
+            resolved = candidate
+        if resolved.exists():
+            anchor_sources[name] = str(resolved)
+            anchor_hashes[name] = anchor_digest(resolved)
+        else:
+            anchor_missing.append(str(resolved))
+    if len(anchor_missing) == 3:
+        warnings.append("All anchor files missing (AGENTS.md, HANDOFF.md, CLAUDE.md).")
+
     transformed = [compact_record(obj, args, state) for obj in records]
+    transformed = prune_stale_lineage(transformed, args, state)
 
     with compacted_copy.open("w", encoding="utf-8") as dst:
         for compacted in transformed:
@@ -341,11 +532,22 @@ def main() -> int:
         "jq_valid": jq_ok,
         "manifest_path": str(manifest_path),
         "changes": state,
+        "warnings": warnings,
+        "compaction_depth": safe_depth,
+        "anchor_sources": anchor_sources,
+        "anchor_hashes": anchor_hashes,
+        "anchor_missing": anchor_missing,
+        "pruned_lineage_entries": state["pruned_lineage_entries"],
+        "kept_lineage_entries": state["kept_lineage_entries"],
         "policy": {
             "profile": "safe",
             "max_tool_output_chars": args.max_tool_output_chars,
             "max_file_history_entries": args.max_file_history_entries,
             "strip_thinking_blocks": True,
+            "warn_depth": args.warn_depth,
+            "max_depth": args.max_depth,
+            "safe_depth": safe_depth,
+            "lineage_window": args.lineage_window,
         },
     }
 
@@ -365,6 +567,10 @@ def main() -> int:
         max_replacement_records=0,
     )
 
+    manifest.setdefault("policy", {})
+    manifest["policy"]["safe_depth"] = safe_depth
+    if parent_manifest_path is not None:
+        manifest["lineage"]["parent_manifest"] = str(parent_manifest_path)
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     marker_path = write_thread_marker(
         source=source,
@@ -383,6 +589,8 @@ def main() -> int:
                     "source": str(source),
                     "bytes_saved": report["bytes_saved"],
                     "changes": state,
+                    "warnings": warnings,
+                    "compaction_depth": safe_depth,
                     "report_path": str(report_path),
                     "manifest_path": str(manifest_path),
                 },

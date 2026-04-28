@@ -71,6 +71,9 @@ python3 compact_codex_session.py --profile safe /path/to/codex.jsonl
 python3 compact_codex_session.py --profile resume /path/to/codex.jsonl
 python3 compact_claude_session.py /path/to/claude.jsonl
 python3 compact_gemini_session.py /path/to/gemini-session.json
+
+# Claude safe depth controls (optional overrides)
+python3 compact_claude_session.py /path/to/claude.jsonl --warn-depth 8 --max-depth 12
 ```
 
 Session markers:
@@ -198,6 +201,22 @@ Current `safe` trimming targets:
 - oversized `system/local_command` content
 - reduce `message.usage` to core counters/tier
 - compact oversized `file-history-snapshot.trackedFileBackups` maps to a bounded entry set + truncation metadata
+- depth guard for safe-on-safe chains:
+  - warning at depth `>= 8`
+  - hard stop at depth `>= 12` (non-zero exit; start fresh from handover)
+- per-run anchor digests from live project files:
+  - `AGENTS.md`, `HANDOFF.md`, `CLAUDE.md`
+  - report fields: `anchor_sources`, `anchor_hashes`, `anchor_missing`
+- stale lineage pruning for status/history records:
+  - lineage/status types are windowed to newest entries per type
+  - duplicate/superseded lineage blobs are dropped
+  - report fields: `pruned_lineage_entries`, `kept_lineage_entries`
+
+Current Claude-safe optional flags:
+
+- `--warn-depth` (default `8`)
+- `--max-depth` (default `12`)
+- `--lineage-window` (default `512`)
 
 Post-swap hygiene for Claude sessions:
 
