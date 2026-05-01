@@ -98,6 +98,12 @@ Session markers:
 - `compact_gemini_session.py`
   - conservative Gemini compactor
   - currently `safe` only, plus `--show-summary` and `--show-lineage`
+- `codex_safety.py`
+  - depth guard, model switch detection, anchor refresh helpers for Codex compactor
+- `fix-codex-session.py`
+  - one-off scrubber for model contamination inside `compacted.replacement_history`
+  - two importable functions: `scrub_replacement_history_model`, `scrub_replacement_history_phrases`
+  - covers a scope `--normalize-model` does not reach (replacement_history items, not turn_context)
 - `lineage.py`
   - provenance and parent/child session lineage helpers
 - `reproduce_codex_session_profiles.sh`
