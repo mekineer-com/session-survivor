@@ -452,6 +452,13 @@ def detect_model_switches(records: list[dict]) -> list[dict]:
     return switches
 
 
+def summarize_models_seen(model_switches: list[dict]) -> list[str]:
+    if not model_switches:
+        return []
+    models = {s["to"] for s in model_switches} | {model_switches[0]["from"]}
+    return sorted(models)
+
+
 def find_compacted_source_manifest(source: pathlib.Path) -> pathlib.Path | None:
     parts = source.resolve().parts
     compacted_indexes = [idx for idx, part in enumerate(parts) if part == "compacted"]
@@ -1079,7 +1086,7 @@ def main() -> int:
 
     model_switches = detect_model_switches(records)
     if model_switches:
-        models_seen = {s["to"] for s in model_switches} | {model_switches[0]["from"]}
+        models_seen = summarize_models_seen(model_switches)
         print(
             f"WARNING: {len(model_switches)} model switch(es) detected: {', '.join(sorted(models_seen))}",
             file=sys.stderr,
@@ -1181,8 +1188,7 @@ def main() -> int:
     }
     warnings = list(format_warnings)
     if model_switches:
-        models_seen = {s["to"] for s in model_switches} | {model_switches[0]["from"]}
-        warnings.append(f"Model switches detected: {', '.join(sorted(models_seen))}")
+        warnings.append(f"Model switches detected: {', '.join(summarize_models_seen(model_switches))}")
     if depth >= args.warn_depth:
         warnings.append(f"Compaction depth {depth} (warn={args.warn_depth}, max={args.max_depth})")
     if warnings:
