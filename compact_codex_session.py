@@ -225,7 +225,7 @@ def shorten(text: str, max_chars: int, label: str) -> tuple[str, bool]:
 
 
 def compact_content_text(text: str, state: dict[str, int]) -> str:
-    if text.startswith(AGENTS_PREFIX):
+    if text.startswith(AGENTS_PREFIX) or text.startswith("# AGENTS.md"):
         state["duplicated_instruction_messages"] += 1
         return AGENTS_PLACEHOLDER
     return text
@@ -451,7 +451,46 @@ def detect_model_switches(records: list[dict]) -> list[dict]:
     return switches
 
 
+def find_compacted_source_manifest(source: pathlib.Path) -> pathlib.Path | None:
+    parts = source.resolve().parts
+    compacted_indexes = [idx for idx, part in enumerate(parts) if part == "compacted"]
+    if not compacted_indexes:
+        return None
+    idx = compacted_indexes[-1]
+    root = pathlib.Path(*parts[:idx])
+    rel = pathlib.Path(*parts[idx + 1 :])
+    candidate = root / "manifests" / rel.with_suffix(".manifest.json")
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def read_compaction_depth_from_manifest(manifest_path: pathlib.Path) -> int | None:
+    try:
+        obj = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    policy = obj.get("policy")
+    if isinstance(policy, dict):
+        depth = policy.get("compaction_depth")
+        if isinstance(depth, int) and depth >= 0:
+            return depth
+    lineage = obj.get("lineage")
+    if isinstance(lineage, dict):
+        depth = lineage.get("ancestor_depth")
+        if isinstance(depth, int) and depth >= 0:
+            return depth
+    return None
+
+
 def compute_ancestor_depth(source: pathlib.Path) -> int:
+    manifest_path = find_compacted_source_manifest(source)
+    if manifest_path is not None:
+        prior_depth = read_compaction_depth_from_manifest(manifest_path)
+        if prior_depth is None:
+            return 1
+        return prior_depth + 1
+
     provenance = extract_checkpoint_provenance(source)
     if not provenance:
         return 0
@@ -461,19 +500,57 @@ def compute_ancestor_depth(source: pathlib.Path) -> int:
         return 1
 
 
-def load_workspace_agents_md() -> str | None:
-    agents_path = WORKSPACE_ROOT / "AGENTS.md"
+def find_agents_md_for_path(path: pathlib.Path) -> pathlib.Path | None:
+    current = path.expanduser().resolve()
+    if current.is_file():
+        current = current.parent
+    for parent in (current, *current.parents):
+        candidate = parent / "AGENTS.md"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def detect_project_root(records: list[dict], source: pathlib.Path) -> pathlib.Path | None:
+    for obj in reversed(records):
+        if obj.get("type") != "turn_context":
+            continue
+        payload = obj.get("payload", {})
+        cwd = payload.get("cwd")
+        if not isinstance(cwd, str) or not cwd.startswith("/"):
+            continue
+        agents_path = find_agents_md_for_path(pathlib.Path(cwd))
+        if agents_path is not None:
+            return agents_path.parent
+    fallback_agents = find_agents_md_for_path(source)
+    if fallback_agents is not None:
+        return fallback_agents.parent
+    return None
+
+
+def load_workspace_agents_md(project_root: pathlib.Path | None) -> tuple[str | None, pathlib.Path | None]:
+    if project_root is None:
+        return None, None
+    agents_path = project_root / "AGENTS.md"
     if not agents_path.exists():
-        return None
-    return agents_path.read_text(encoding="utf-8", errors="ignore")
+        return None, None
+    return agents_path.read_text(encoding="utf-8", errors="ignore"), agents_path
 
 
-def refresh_anchors(records: list[dict], state: dict[str, int]) -> str | None:
+def normalize_agents_instruction(scope: str, content: str) -> str:
+    body = content.rstrip("\n")
+    return f"{AGENTS_PREFIX}{scope}\n\n<INSTRUCTIONS>\n{body}\n</INSTRUCTIONS>"
+
+
+def refresh_anchors(
+    records: list[dict],
+    state: dict[str, int],
+    project_root: pathlib.Path | None,
+) -> tuple[str | None, pathlib.Path | None]:
     """Replace stale AGENTS.md copies in turn_context with current workspace version."""
-    current_agents = load_workspace_agents_md()
+    current_agents, agents_path = load_workspace_agents_md(project_root)
     if current_agents is None:
-        return None
-    agents_key = AGENTS_PREFIX
+        return None, None
     refreshed = 0
     for obj in records:
         if obj.get("type") != "turn_context":
@@ -484,11 +561,18 @@ def refresh_anchors(records: list[dict], state: dict[str, int]) -> str | None:
             continue
         if instructions == AGENTS_PLACEHOLDER:
             continue
-        if instructions.startswith(agents_key) and instructions != current_agents:
-            payload["user_instructions"] = current_agents
+        if not instructions.startswith(AGENTS_PREFIX):
+            continue
+        first_line = instructions.splitlines()[0]
+        scope = first_line[len(AGENTS_PREFIX) :].strip()
+        if not scope:
+            scope = str(project_root or "")
+        desired = normalize_agents_instruction(scope, current_agents)
+        if instructions != desired:
+            payload["user_instructions"] = desired
             refreshed += 1
     state["anchor_refreshed"] = refreshed
-    return hashlib.sha256(current_agents.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(current_agents.encode("utf-8")).hexdigest()[:16], agents_path
 
 
 def selected_replacement_history(old_turns: list[list[dict]], context_terms: set[str], max_records: int) -> tuple[list[dict], list[str]]:
@@ -929,6 +1013,10 @@ def write_thread_marker(
 def main() -> int:
     args = parse_args()
     apply_profile_defaults(args)
+    if args.warn_depth < 0 or args.max_depth < 0:
+        raise SystemExit("warn-depth and max-depth must be non-negative.")
+    if args.warn_depth >= args.max_depth:
+        raise SystemExit("warn-depth must be lower than max-depth.")
     if args.latest:
         source = latest_session(SESSION_ROOT)
     elif args.session:
@@ -1010,9 +1098,13 @@ def main() -> int:
         if normalized:
             print(f"Normalized {normalized} turn_context model fields to {args.normalize_model}.", file=sys.stderr)
 
+    project_root = detect_project_root(records, source)
     anchor_hash: str | None = None
+    anchor_source: str | None = None
     if not args.no_anchor_refresh:
-        anchor_hash = refresh_anchors(records, state)
+        anchor_hash, anchor_path = refresh_anchors(records, state, project_root)
+        if anchor_path is not None:
+            anchor_source = str(anchor_path)
         if state.get("anchor_refreshed", 0) > 0:
             print(f"Refreshed AGENTS.md in {state['anchor_refreshed']} turn_context records.", file=sys.stderr)
 
@@ -1069,6 +1161,7 @@ def main() -> int:
         "compaction_depth": depth,
         "model_switches": model_switches if model_switches else None,
         "anchor_hash": anchor_hash,
+        "anchor_source": anchor_source,
         "changes": state,
         "policy": {
             "profile": args.profile,
@@ -1112,6 +1205,20 @@ def main() -> int:
         keep_last_turns=args.keep_last_turns,
         max_replacement_records=args.max_replacement_records,
     )
+    manifest.setdefault("policy", {})
+    manifest["policy"]["compaction_depth"] = depth
+    manifest["policy"]["warn_depth"] = args.warn_depth
+    manifest["policy"]["max_depth"] = args.max_depth
+    manifest["policy"]["anchor_refresh"] = not args.no_anchor_refresh
+    if args.normalize_model:
+        manifest["policy"]["normalize_model"] = args.normalize_model
+    manifest.setdefault("analysis", {})
+    if model_switches:
+        manifest["analysis"]["model_switches"] = model_switches
+    if anchor_hash is not None:
+        manifest["analysis"]["anchor_hash"] = anchor_hash
+    if anchor_source is not None:
+        manifest["analysis"]["anchor_source"] = anchor_source
 
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     marker_path = write_thread_marker(
