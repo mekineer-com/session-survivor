@@ -709,112 +709,145 @@ def synthetic_compacted_turn(
     ]
 
 
+def content_text_key(entry: dict) -> str | None:
+    if "text" in entry:
+        return "text"
+    if "input_text" in entry:
+        return "input_text"
+    if "output_text" in entry:
+        return "output_text"
+    return None
+
+
+def compact_response_item(payload: dict, args: argparse.Namespace, state: dict[str, int]) -> None:
+    payload_type = payload.get("type")
+
+    if payload_type == "reasoning":
+        if payload.pop("encrypted_content", None) is not None:
+            state["reasoning_encrypted_removed"] += 1
+        return
+
+    if payload_type in ("function_call_output", "custom_tool_call_output"):
+        output = payload.get("output")
+        if isinstance(output, str):
+            output, changed = shorten(output, args.max_tool_output_chars, OUTPUT_PLACEHOLDER)
+            payload["output"] = output
+            if changed:
+                state["tool_outputs_truncated"] += 1
+        return
+
+    if payload_type == "custom_tool_call":
+        tool_input = payload.get("input")
+        if isinstance(tool_input, str):
+            tool_input, changed = shorten(tool_input, args.max_tool_input_chars, PATCH_PLACEHOLDER)
+            payload["input"] = tool_input
+            if changed:
+                state["tool_inputs_truncated"] += 1
+        return
+
+    if payload_type == "function_call":
+        arguments = payload.get("arguments")
+        if isinstance(arguments, str):
+            arguments, changed = shorten(arguments, args.max_tool_input_chars, PATCH_PLACEHOLDER)
+            payload["arguments"] = arguments
+            if changed:
+                state["tool_inputs_truncated"] += 1
+        return
+
+    if payload_type != "message":
+        return
+
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return
+    for entry in content:
+        if not isinstance(entry, dict):
+            continue
+        key = content_text_key(entry)
+        if key and isinstance(entry.get(key), str):
+            entry[key] = compact_content_text(entry[key], state)
+
+
+def compact_event_msg(payload: dict, args: argparse.Namespace, state: dict[str, int]) -> None:
+    if payload.get("type") == "token_count":
+        info = payload.get("info")
+        if isinstance(info, dict):
+            total = info.get("total_token_usage")
+            model_context_window = info.get("model_context_window")
+            payload["info"] = {
+                "total_token_usage": total,
+                "model_context_window": model_context_window,
+            }
+        payload.pop("rate_limits", None)
+    if payload.get("type") == "agent_reasoning":
+        text = payload.get("text")
+        if isinstance(text, str):
+            text, changed = shorten(text, args.max_reasoning_chars, REASONING_PLACEHOLDER)
+            payload["text"] = text
+            if changed:
+                state["agent_reasoning_truncated"] += 1
+
+
+def compact_turn_context(payload: dict, args: argparse.Namespace, state: dict[str, int]) -> None:
+    user_instructions = payload.get("user_instructions")
+    if isinstance(user_instructions, str):
+        payload["user_instructions"] = compact_content_text(user_instructions, state)
+    summary = payload.get("summary")
+    if isinstance(summary, str):
+        summary, _ = shorten(summary, args.max_reasoning_chars, REASONING_PLACEHOLDER)
+        payload["summary"] = summary
+    collaboration = payload.get("collaboration_mode")
+    if not isinstance(collaboration, dict):
+        return
+    settings = collaboration.get("settings")
+    if not isinstance(settings, dict):
+        return
+    dev_instructions = settings.get("developer_instructions")
+    if isinstance(dev_instructions, str):
+        dev_instructions, _ = shorten(dev_instructions, args.max_reasoning_chars, REASONING_PLACEHOLDER)
+        settings["developer_instructions"] = dev_instructions
+
+
+def compact_compacted_payload(payload: dict, args: argparse.Namespace) -> None:
+    history = payload.get("replacement_history")
+    if not isinstance(history, list):
+        return
+    payload["replacement_history"] = history[:MAX_COMPACTED_REPLACEMENT_HISTORY]
+    for rec in payload["replacement_history"]:
+        if not isinstance(rec, dict):
+            continue
+        content = rec.get("content")
+        if not isinstance(content, list):
+            continue
+        for entry in content:
+            if not isinstance(entry, dict):
+                continue
+            key = content_text_key(entry)
+            if key and isinstance(entry.get(key), str):
+                entry[key], _ = shorten(entry[key], args.max_reasoning_chars, REASONING_PLACEHOLDER)
+
+
 def compact_record(obj: dict, args: argparse.Namespace, state: dict[str, int]) -> dict:
     item = copy.deepcopy(obj)
     item_type = item.get("type")
 
     if item_type == "response_item":
         payload = item.get("payload", {})
-        payload_type = payload.get("type")
-
-        if payload_type == "reasoning":
-            if payload.pop("encrypted_content", None) is not None:
-                state["reasoning_encrypted_removed"] += 1
-
-        elif payload_type in ("function_call_output", "custom_tool_call_output"):
-            output = payload.get("output")
-            if isinstance(output, str):
-                output, changed = shorten(output, args.max_tool_output_chars, OUTPUT_PLACEHOLDER)
-                payload["output"] = output
-                if changed:
-                    state["tool_outputs_truncated"] += 1
-
-        elif payload_type == "custom_tool_call":
-            tool_input = payload.get("input")
-            if isinstance(tool_input, str):
-                tool_input, changed = shorten(tool_input, args.max_tool_input_chars, PATCH_PLACEHOLDER)
-                payload["input"] = tool_input
-                if changed:
-                    state["tool_inputs_truncated"] += 1
-        elif payload_type == "function_call":
-            arguments = payload.get("arguments")
-            if isinstance(arguments, str):
-                arguments, changed = shorten(arguments, args.max_tool_input_chars, PATCH_PLACEHOLDER)
-                payload["arguments"] = arguments
-                if changed:
-                    state["tool_inputs_truncated"] += 1
-
-        elif payload_type == "message":
-            content = payload.get("content")
-            if isinstance(content, list):
-                for entry in content:
-                    if not isinstance(entry, dict):
-                        continue
-                    key = None
-                    if "text" in entry:
-                        key = "text"
-                    elif "input_text" in entry:
-                        key = "input_text"
-                    elif "output_text" in entry:
-                        key = "output_text"
-                    if key and isinstance(entry.get(key), str):
-                        entry[key] = compact_content_text(entry[key], state)
+        if isinstance(payload, dict):
+            compact_response_item(payload, args, state)
 
     elif item_type == "event_msg":
         payload = item.get("payload", {})
-        if payload.get("type") == "token_count":
-            info = payload.get("info")
-            if isinstance(info, dict):
-                total = info.get("total_token_usage")
-                model_context_window = info.get("model_context_window")
-                payload["info"] = {
-                    "total_token_usage": total,
-                    "model_context_window": model_context_window,
-                }
-            payload.pop("rate_limits", None)
-        if payload.get("type") == "agent_reasoning":
-            text = payload.get("text")
-            if isinstance(text, str):
-                text, changed = shorten(text, args.max_reasoning_chars, REASONING_PLACEHOLDER)
-                payload["text"] = text
-                if changed:
-                    state["agent_reasoning_truncated"] += 1
+        if isinstance(payload, dict):
+            compact_event_msg(payload, args, state)
     elif item_type == "turn_context":
         payload = item.get("payload", {})
         if isinstance(payload, dict):
-            user_instructions = payload.get("user_instructions")
-            if isinstance(user_instructions, str):
-                payload["user_instructions"] = compact_content_text(user_instructions, state)
-            summary = payload.get("summary")
-            if isinstance(summary, str):
-                summary, _ = shorten(summary, args.max_reasoning_chars, REASONING_PLACEHOLDER)
-                payload["summary"] = summary
-            collaboration = payload.get("collaboration_mode")
-            if isinstance(collaboration, dict):
-                settings = collaboration.get("settings")
-                if isinstance(settings, dict):
-                    dev_instructions = settings.get("developer_instructions")
-                    if isinstance(dev_instructions, str):
-                        dev_instructions, _ = shorten(dev_instructions, args.max_reasoning_chars, REASONING_PLACEHOLDER)
-                        settings["developer_instructions"] = dev_instructions
+            compact_turn_context(payload, args, state)
     elif item_type == "compacted":
         payload = item.get("payload", {})
         if isinstance(payload, dict):
-            history = payload.get("replacement_history")
-            if isinstance(history, list):
-                payload["replacement_history"] = history[:MAX_COMPACTED_REPLACEMENT_HISTORY]
-                for rec in payload["replacement_history"]:
-                    if not isinstance(rec, dict):
-                        continue
-                    content = rec.get("content")
-                    if not isinstance(content, list):
-                        continue
-                    for entry in content:
-                        if not isinstance(entry, dict):
-                            continue
-                        key = "text" if "text" in entry else "input_text" if "input_text" in entry else "output_text" if "output_text" in entry else None
-                        if key and isinstance(entry.get(key), str):
-                            entry[key], _ = shorten(entry[key], args.max_reasoning_chars, REASONING_PLACEHOLDER)
+            compact_compacted_payload(payload, args)
 
     return item
 
