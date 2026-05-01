@@ -198,8 +198,6 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
         args.emit_compacted_spans = True
         if args.keep_last_turns == 6:
             args.keep_last_turns = 10
-        if args.max_replacement_records == 24:
-            args.max_replacement_records = 24
     elif args.profile == "safe":
         if not args.emit_compacted_spans:
             args.keep_last_turns = max(args.keep_last_turns, 6)
