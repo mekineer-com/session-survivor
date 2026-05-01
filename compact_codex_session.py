@@ -225,7 +225,10 @@ def shorten(text: str, max_chars: int, label: str) -> tuple[str, bool]:
 
 
 def compact_content_text(text: str, state: dict[str, int]) -> str:
-    if text.startswith(AGENTS_PREFIX) or text.startswith("# AGENTS.md"):
+    if text.startswith(AGENTS_PREFIX) or (
+        text.startswith("# AGENTS.md")
+        and ("\n## " in text or "\n<INSTRUCTIONS>\n" in text)
+    ):
         state["duplicated_instruction_messages"] += 1
         return AGENTS_PLACEHOLDER
     return text
