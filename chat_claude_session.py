@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import sys
 import uuid
 from typing import Any
@@ -16,14 +17,11 @@ from lineage import build_compaction_manifest, describe_lineage
 
 DEFAULT_OUTPUT_ROOT = pathlib.Path("/home/marcos/apps-codex/session-survivor/outputs/claude-chat-resume")
 PLACEHOLDER = "[Compacted Claude chat message"
-META_NOISE_PATTERNS = (
-    "<local-command-caveat>",
-    "<local-command-stdout>",
-    "<local-command-stderr>",
-    "<command-name>",
-    "<command-message>",
-    "<command-args>",
-    "<task-notification>",
+COMMAND_WRAPPER_RE = re.compile(
+    r"^\s*<command-name>.*?</command-name>\s*"
+    r"<command-message>.*?</command-message>\s*"
+    r"<command-args>.*?</command-args>\s*$",
+    re.DOTALL,
 )
 
 
@@ -63,7 +61,16 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def is_existing_compaction_placeholder(text: str) -> bool:
+    return (
+        "\n... [Compacted Claude chat message; original length=" in text
+        and text.rstrip().endswith(" chars]")
+    )
+
+
 def shorten(text: str, max_chars: int) -> tuple[str, bool]:
+    if is_existing_compaction_placeholder(text):
+        return text, False
     if len(text) <= max_chars:
         return text, False
     kept = text[:max_chars].rstrip()
@@ -151,10 +158,19 @@ def extract_message_text(content: Any) -> str:
 
 
 def is_meta_noise(text: str) -> bool:
-    lowered = text.lower()
-    for marker in META_NOISE_PATTERNS:
-        if marker.lower() in lowered:
-            return True
+    normalized = text.strip()
+    if not normalized:
+        return False
+    if normalized.startswith("<local-command-caveat>") and normalized.endswith("</local-command-caveat>"):
+        return True
+    if normalized.startswith("<local-command-stdout>") and normalized.endswith("</local-command-stdout>"):
+        return True
+    if normalized.startswith("<local-command-stderr>") and normalized.endswith("</local-command-stderr>"):
+        return True
+    if COMMAND_WRAPPER_RE.match(normalized):
+        return True
+    if normalized.startswith("<task-notification>"):
+        return True
     return False
 
 
@@ -273,9 +289,9 @@ def main() -> int:
         "synthetic_timestamp_assigned": 0,
     }
     compacted = compact_chat_records(records, source, args, state)
-    warnings: list[str] = []
     if not compacted:
-        warnings.append("No chat records survived filtering; resume may not be possible.")
+        raise SystemExit("No chat records survived filtering; refusing to write empty resume file.")
+    warnings: list[str] = []
 
     with compacted_copy.open("w", encoding="utf-8") as dst:
         for row in compacted:

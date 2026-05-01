@@ -243,6 +243,9 @@ Claude chat-resume mode (`chat_claude_session.py`):
 - dropped records:
   - attachments, queue/status lineage, permissions/title records, file-history snapshots, non-text tool payloads
   - command/meta wrapper chatter (`<local-command-caveat>`, `<command-name>`, task notifications)
+- guardrails:
+  - idempotent truncation (re-running chat-resume does not keep shortening already-compacted placeholders)
+  - hard fail (non-zero exit) if filtering would produce an empty output file
 - why `uuid` (not `parentUuid`):
   - controlled `claude -r <session_id> --fork-session -p` tests passed with `type+message+timestamp+uuid`
   - controlled tests also passed with `parentUuid`, but `uuid` is self-contained and does not depend on parent links to dropped records
