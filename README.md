@@ -14,6 +14,7 @@ Current support:
   - `--show-lineage`
 - Claude JSONL
   - `safe`
+  - `chat-resume`
   - `--show-summary`
   - `--show-lineage`
 - Gemini JSON
@@ -25,7 +26,7 @@ Current non-goals:
 
 - fully automated swap/rollback
 - polished packaging
-- Claude `resume`
+- full-fidelity Claude `resume`
 
 ## Why this exists
 
@@ -70,6 +71,7 @@ Run one-off compaction directly:
 python3 compact_codex_session.py --profile safe /path/to/codex.jsonl
 python3 compact_codex_session.py --profile resume /path/to/codex.jsonl
 python3 compact_claude_session.py /path/to/claude.jsonl
+python3 chat_claude_session.py /path/to/claude.jsonl
 python3 compact_gemini_session.py /path/to/gemini-session.json
 
 # Claude safe depth controls (optional overrides)
@@ -95,6 +97,10 @@ Session markers:
 - `compact_claude_session.py`
   - conservative Claude compactor
   - currently `safe` only, plus `--show-summary` and `--show-lineage`
+- `chat_claude_session.py`
+  - aggressive Claude chat-only compactor intended for `/resume`
+  - emits only dialogue (`user`/`assistant` text) with a resume-safe envelope
+  - single behavior (`claude-chat-resume`), plus `--show-summary` and `--show-lineage`
 - `compact_gemini_session.py`
   - conservative Gemini compactor
   - currently `safe` only, plus `--show-summary` and `--show-lineage`
@@ -224,6 +230,37 @@ Current Claude-safe optional flags:
 - `--max-depth` (default `12`)
 - `--lineage-window` (default `512`)
 
+Claude chat-resume mode (`chat_claude_session.py`):
+
+- purpose:
+  - strip Claude session JSONL to chat dialogue only while keeping it resumable
+- kept records:
+  - top-level `type in {user, assistant}`
+  - `message.role`
+  - merged text content from string content or `message.content[*].type=text`
+  - `timestamp`
+  - `uuid` (chosen resume identity field)
+- dropped records:
+  - attachments, queue/status lineage, permissions/title records, file-history snapshots, non-text tool payloads
+  - command/meta wrapper chatter (`<local-command-caveat>`, `<command-name>`, task notifications)
+- why `uuid` (not `parentUuid`):
+  - controlled `claude -r <session_id> --fork-session -p` tests passed with `type+message+timestamp+uuid`
+  - controlled tests also passed with `parentUuid`, but `uuid` is self-contained and does not depend on parent links to dropped records
+- tested resume boundary (May 1, 2026):
+  - passes: `type + message + timestamp + uuid`
+  - passes: `type + message + timestamp + parentUuid`
+  - fails: `type + message + timestamp` (and conversation-only ultra-minimal variants)
+
+Usage:
+
+```sh
+# Build compacted chat-resume copy (does not swap live file by itself)
+python3 chat_claude_session.py /path/to/claude.jsonl
+
+# Optional: tighter per-message cap
+python3 chat_claude_session.py /path/to/claude.jsonl --max-message-chars 1600
+```
+
 Post-swap hygiene for Claude sessions:
 
 - if the target session was already open while you swapped the JSONL, restart Claude before testing (`/exit` all Claude terminals, then relaunch) so it reloads the file from disk
@@ -277,4 +314,4 @@ These docs still use Codex-specific naming and should be generalized later.
 - paths are still tuned to the current local workspace
 - no standalone packaging yet
 - no generic session schema across vendors yet
-- no Claude `resume` policy yet
+- no full-fidelity Claude `resume` policy yet (only aggressive `chat-resume`)
