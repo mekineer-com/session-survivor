@@ -161,6 +161,35 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print lineage/provenance information for the input session and exit.",
     )
+    parser.add_argument(
+        "--warn-depth",
+        type=int,
+        default=6,
+        help="Warn when compaction depth reaches this level.",
+    )
+    parser.add_argument(
+        "--max-depth",
+        type=int,
+        default=10,
+        help="Refuse to compact beyond this depth (use --force to override).",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Override depth limit.",
+    )
+    parser.add_argument(
+        "--normalize-model",
+        type=str,
+        default=None,
+        metavar="MODEL",
+        help="Rewrite all turn_context model fields to MODEL (opt-in).",
+    )
+    parser.add_argument(
+        "--no-anchor-refresh",
+        action="store_true",
+        help="Skip refreshing AGENTS.md from the workspace.",
+    )
     return parser.parse_args()
 
 
@@ -403,6 +432,63 @@ def core_format_warnings(records: list[dict]) -> list[str]:
     if not has_message_item:
         warnings.append("Missing response_item payload.type=message records (semantic scoring/checkpoint quality may degrade).")
     return warnings
+
+
+def detect_model_switches(records: list[dict]) -> list[dict]:
+    """Scan turn_context records for model changes. Returns list of switch events."""
+    switches: list[dict] = []
+    prev_model: str | None = None
+    turn_idx = 0
+    for obj in records:
+        if obj.get("type") != "turn_context":
+            continue
+        model = obj.get("payload", {}).get("model")
+        if model and model != prev_model:
+            if prev_model is not None:
+                switches.append({"turn": turn_idx, "from": prev_model, "to": model})
+            prev_model = model
+        turn_idx += 1
+    return switches
+
+
+def compute_ancestor_depth(source: pathlib.Path) -> int:
+    provenance = extract_checkpoint_provenance(source)
+    if not provenance:
+        return 0
+    try:
+        return int(provenance.get("ancestor_depth") or 0) + 1
+    except Exception:
+        return 1
+
+
+def load_workspace_agents_md() -> str | None:
+    agents_path = WORKSPACE_ROOT / "AGENTS.md"
+    if not agents_path.exists():
+        return None
+    return agents_path.read_text(encoding="utf-8", errors="ignore")
+
+
+def refresh_anchors(records: list[dict], state: dict[str, int]) -> str | None:
+    """Replace stale AGENTS.md copies in turn_context with current workspace version."""
+    current_agents = load_workspace_agents_md()
+    if current_agents is None:
+        return None
+    agents_key = AGENTS_PREFIX
+    refreshed = 0
+    for obj in records:
+        if obj.get("type") != "turn_context":
+            continue
+        payload = obj.get("payload", {})
+        instructions = payload.get("user_instructions")
+        if not isinstance(instructions, str):
+            continue
+        if instructions == AGENTS_PLACEHOLDER:
+            continue
+        if instructions.startswith(agents_key) and instructions != current_agents:
+            payload["user_instructions"] = current_agents
+            refreshed += 1
+    state["anchor_refreshed"] = refreshed
+    return hashlib.sha256(current_agents.encode("utf-8")).hexdigest()[:16]
 
 
 def selected_replacement_history(old_turns: list[list[dict]], context_terms: set[str], max_records: int) -> tuple[list[dict], list[str]]:
@@ -857,6 +943,18 @@ def main() -> int:
         print(json.dumps(describe_lineage(source), indent=2, ensure_ascii=False))
         return 0
 
+    depth = compute_ancestor_depth(source)
+    if depth >= args.max_depth and not args.force:
+        raise SystemExit(
+            f"Compaction depth {depth} reached max-depth {args.max_depth}. "
+            "Start a fresh session or use --force to override."
+        )
+    if depth >= args.warn_depth:
+        print(
+            f"WARNING: Compaction depth {depth} (warn={args.warn_depth}, max={args.max_depth}).",
+            file=sys.stderr,
+        )
+
     output_root = pathlib.Path(args.output_root).expanduser().resolve()
     rel = relative_session_path(source)
     original_copy = output_root / "original" / rel
@@ -881,12 +979,42 @@ def main() -> int:
         "semantic_records_replaced": 0,
         "semantic_replacement_records": 0,
         "checkpoint_sections_emitted": 0,
+        "model_fields_normalized": 0,
+        "anchor_refreshed": 0,
     }
 
     records = [json.loads(line) for line in original_bytes.splitlines()]
     format_warnings = core_format_warnings(records)
     for warning in format_warnings:
         print(f"WARNING: {warning}", file=sys.stderr)
+
+    model_switches = detect_model_switches(records)
+    if model_switches:
+        models_seen = {s["to"] for s in model_switches} | {model_switches[0]["from"]}
+        print(
+            f"WARNING: {len(model_switches)} model switch(es) detected: {', '.join(sorted(models_seen))}",
+            file=sys.stderr,
+        )
+        for sw in model_switches:
+            print(f"  turn {sw['turn']}: {sw['from']} -> {sw['to']}", file=sys.stderr)
+
+    if args.normalize_model:
+        normalized = 0
+        for obj in records:
+            if obj.get("type") == "turn_context":
+                payload = obj.get("payload", {})
+                if payload.get("model") and payload["model"] != args.normalize_model:
+                    payload["model"] = args.normalize_model
+                    normalized += 1
+        state["model_fields_normalized"] = normalized
+        if normalized:
+            print(f"Normalized {normalized} turn_context model fields to {args.normalize_model}.", file=sys.stderr)
+
+    anchor_hash: str | None = None
+    if not args.no_anchor_refresh:
+        anchor_hash = refresh_anchors(records, state)
+        if state.get("anchor_refreshed", 0) > 0:
+            print(f"Refreshed AGENTS.md in {state['anchor_refreshed']} turn_context records.", file=sys.stderr)
 
     if args.emit_compacted_spans:
         header, turns = split_session_objects(records)
@@ -938,6 +1066,9 @@ def main() -> int:
         "original_lines": original_validation["line_count"],
         "compacted_lines": compacted_validation["line_count"],
         "manifest_path": str(manifest_path),
+        "compaction_depth": depth,
+        "model_switches": model_switches if model_switches else None,
+        "anchor_hash": anchor_hash,
         "changes": state,
         "policy": {
             "profile": args.profile,
@@ -948,10 +1079,20 @@ def main() -> int:
             "max_tool_input_chars": args.max_tool_input_chars,
             "max_reasoning_chars": args.max_reasoning_chars,
             "duplicate_instruction_placeholder": AGENTS_PLACEHOLDER,
+            "warn_depth": args.warn_depth,
+            "max_depth": args.max_depth,
+            "normalize_model": args.normalize_model,
+            "anchor_refresh": not args.no_anchor_refresh,
         },
     }
-    if format_warnings:
-        report["warnings"] = format_warnings
+    warnings = list(format_warnings)
+    if model_switches:
+        models_seen = {s["to"] for s in model_switches} | {model_switches[0]["from"]}
+        warnings.append(f"Model switches detected: {', '.join(sorted(models_seen))}")
+    if depth >= args.warn_depth:
+        warnings.append(f"Compaction depth {depth} (warn={args.warn_depth}, max={args.max_depth})")
+    if warnings:
+        report["warnings"] = warnings
     checkpoint_preview = extract_checkpoint_preview(transformed)
     if checkpoint_preview is not None:
         report["checkpoint_preview"] = checkpoint_preview
