@@ -179,6 +179,61 @@ def stable_uuid(source: pathlib.Path, line_no: int) -> str:
     return str(uuid.uuid5(namespace, f"line-{line_no}"))
 
 
+def latest_custom_title_record(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    candidate: dict[str, Any] | None = None
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "custom-title":
+            continue
+        title = item.get("customTitle")
+        if isinstance(title, str) and title.strip():
+            candidate = item
+    return candidate
+
+
+def detect_session_defaults(records: list[dict[str, Any]], source: pathlib.Path) -> dict[str, str]:
+    keys = ("sessionId", "userType", "entrypoint", "cwd", "version", "gitBranch", "slug")
+    defaults: dict[str, str] = {}
+    for key in keys:
+        for item in records:
+            if not isinstance(item, dict):
+                continue
+            value = item.get(key)
+            if isinstance(value, str) and value:
+                defaults[key] = value
+                break
+    defaults.setdefault("sessionId", source.stem)
+    return defaults
+
+
+def chat_envelope_fields(obj: dict[str, Any], defaults: dict[str, str]) -> dict[str, Any]:
+    keep_fields = (
+        "parentUuid",
+        "isSidechain",
+        "sessionId",
+        "userType",
+        "entrypoint",
+        "cwd",
+        "version",
+        "gitBranch",
+        "slug",
+        "permissionMode",
+    )
+    out: dict[str, Any] = {}
+    for key in keep_fields:
+        value = obj.get(key)
+        if value is not None:
+            out[key] = value
+            continue
+        if key == "permissionMode":
+            continue
+        fallback = defaults.get(key)
+        if fallback:
+            out[key] = fallback
+    return out
+
+
 def compact_chat_records(
     records: list[dict[str, Any]],
     source: pathlib.Path,
@@ -186,9 +241,22 @@ def compact_chat_records(
     state: dict[str, int],
 ) -> list[dict[str, Any]]:
     compacted: list[dict[str, Any]] = []
+    session_defaults = detect_session_defaults(records, source)
+    custom_title = latest_custom_title_record(records)
+    if custom_title is not None:
+        kept_title: dict[str, Any] = {"type": "custom-title", "customTitle": custom_title["customTitle"]}
+        session_id = custom_title.get("sessionId")
+        if isinstance(session_id, str) and session_id:
+            kept_title["sessionId"] = session_id
+        elif session_defaults.get("sessionId"):
+            kept_title["sessionId"] = session_defaults["sessionId"]
+        compacted.append(kept_title)
+        state["kept_custom_title"] += 1
 
     for line_no, obj in enumerate(records, 1):
         item_type = obj.get("type")
+        if item_type == "custom-title":
+            continue
         if item_type not in ("user", "assistant"):
             state["dropped_non_chat_type"] += 1
             continue
@@ -232,17 +300,17 @@ def compact_chat_records(
         else:
             resume_content = text
 
-        compacted.append(
-            {
-                "type": item_type,
-                "timestamp": timestamp,
-                "uuid": message_uuid,
-                "message": {
-                    "role": role,
-                    "content": resume_content,
-                },
-            }
-        )
+        row: dict[str, Any] = {
+            "type": item_type,
+            "timestamp": timestamp,
+            "uuid": message_uuid,
+            "message": {
+                "role": role,
+                "content": resume_content,
+            },
+        }
+        row.update(chat_envelope_fields(obj, session_defaults))
+        compacted.append(row)
         state["kept_chat_records"] += 1
 
     return compacted
@@ -281,6 +349,7 @@ def main() -> int:
 
     state = {
         "kept_chat_records": 0,
+        "kept_custom_title": 0,
         "dropped_non_chat_type": 0,
         "dropped_non_text": 0,
         "dropped_meta_noise": 0,

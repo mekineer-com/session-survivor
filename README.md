@@ -99,7 +99,7 @@ Session markers:
   - currently `safe` only, plus `--show-summary` and `--show-lineage`
 - `chat_claude_session.py`
   - aggressive Claude chat-only compactor intended for `/resume`
-  - emits only dialogue (`user`/`assistant` text) with a resume-safe envelope
+  - emits dialogue (`user`/`assistant` text) plus minimal resume-discovery metadata
   - single behavior (`claude-chat-resume`), plus `--show-summary` and `--show-lineage`
 - `compact_gemini_session.py`
   - conservative Gemini compactor
@@ -235,13 +235,16 @@ Claude chat-resume mode (`chat_claude_session.py`):
 - purpose:
   - strip Claude session JSONL to chat dialogue only while keeping it resumable
 - kept records:
+  - latest `custom-title` record (`type=custom-title`, `customTitle`, optional `sessionId`)
   - top-level `type in {user, assistant}`
   - `message.role`
   - merged text content from string content or `message.content[*].type=text`
   - `timestamp`
   - `uuid` (chosen resume identity field)
+  - lightweight envelope keys from each kept chat row when present:
+    - `parentUuid`, `isSidechain`, `sessionId`, `userType`, `entrypoint`, `cwd`, `version`, `gitBranch`, `slug`, `permissionMode`
 - dropped records:
-  - attachments, queue/status lineage, permissions/title records, file-history snapshots, non-text tool payloads
+  - attachments, queue/status lineage, most permission/status records, file-history snapshots, non-text tool payloads
   - command/meta wrapper chatter (`<local-command-caveat>`, `<command-name>`, task notifications)
 - guardrails:
   - idempotent truncation (re-running chat-resume does not keep shortening already-compacted placeholders)
