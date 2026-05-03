@@ -18,8 +18,6 @@ from lineage import (
 from codex_safety import (
     compute_ancestor_depth,
     detect_model_switches,
-    detect_project_root,
-    refresh_anchors,
     summarize_models_seen,
 )
 
@@ -28,8 +26,8 @@ SESSION_ROOT = pathlib.Path.home() / ".codex" / "sessions"
 DEFAULT_OUTPUT_ROOT = pathlib.Path("/home/marcos/apps-codex/_exports/sessions")
 AGENTS_PREFIX = "# AGENTS.md instructions for "
 AGENTS_PLACEHOLDER = (
-    "[Compacted duplicate AGENTS instructions. "
-    "Authoritative copy remains in turn_context.user_instructions and workspace AGENTS.md.]"
+    "[Compacted historical AGENTS instructions. "
+    "Fresh AGENTS.md is loaded from disk on the next user turn.]"
 )
 PATCH_PLACEHOLDER = "[Compacted tool input"
 OUTPUT_PLACEHOLDER = "[Compacted tool output"
@@ -195,7 +193,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-anchor-refresh",
         action="store_true",
-        help="Skip refreshing AGENTS.md from the workspace.",
+        help="Deprecated no-op retained for CLI compatibility.",
     )
     return parser.parse_args()
 
@@ -230,13 +228,17 @@ def shorten(text: str, max_chars: int, label: str) -> tuple[str, bool]:
 
 
 def compact_content_text(text: str, state: dict[str, int]) -> str:
-    if text.startswith(AGENTS_PREFIX) or (
-        text.startswith("# AGENTS.md")
-        and ("\n## " in text or "\n<INSTRUCTIONS>\n" in text)
-    ):
+    if is_agents_instruction_blob(text):
         state["duplicated_instruction_messages"] += 1
         return AGENTS_PLACEHOLDER
     return text
+
+
+def is_agents_instruction_blob(text: str) -> bool:
+    return text.startswith(AGENTS_PREFIX) or (
+        text.startswith("# AGENTS.md")
+        and ("\n## " in text or "\n<INSTRUCTIONS>\n" in text)
+    )
 
 
 def default_context_files() -> list[pathlib.Path]:
@@ -808,7 +810,7 @@ def compact_turn_context(payload: dict, args: argparse.Namespace, state: dict[st
         settings["developer_instructions"] = dev_instructions
 
 
-def compact_compacted_payload(payload: dict, args: argparse.Namespace) -> None:
+def compact_compacted_payload(payload: dict, args: argparse.Namespace, state: dict[str, int]) -> None:
     history = payload.get("replacement_history")
     if not isinstance(history, list):
         return
@@ -824,6 +826,7 @@ def compact_compacted_payload(payload: dict, args: argparse.Namespace) -> None:
                 continue
             key = content_text_key(entry)
             if key and isinstance(entry.get(key), str):
+                entry[key] = compact_content_text(entry[key], state)
                 entry[key], _ = shorten(entry[key], args.max_reasoning_chars, REASONING_PLACEHOLDER)
 
 
@@ -847,7 +850,7 @@ def compact_record(obj: dict, args: argparse.Namespace, state: dict[str, int]) -
     elif item_type == "compacted":
         payload = item.get("payload", {})
         if isinstance(payload, dict):
-            compact_compacted_payload(payload, args)
+            compact_compacted_payload(payload, args, state)
 
     return item
 
@@ -913,6 +916,8 @@ def write_thread_marker(
 def main() -> int:
     args = parse_args()
     apply_profile_defaults(args)
+    if args.no_anchor_refresh:
+        print("NOTE: --no-anchor-refresh is deprecated and has no effect.", file=sys.stderr)
     if args.warn_depth < 0 or args.max_depth < 0:
         raise SystemExit("warn-depth and max-depth must be non-negative.")
     if args.warn_depth >= args.max_depth:
@@ -968,7 +973,6 @@ def main() -> int:
         "semantic_replacement_records": 0,
         "checkpoint_sections_emitted": 0,
         "model_fields_normalized": 0,
-        "anchor_refreshed": 0,
     }
 
     records = [json.loads(line) for line in original_bytes.splitlines()]
@@ -997,22 +1001,6 @@ def main() -> int:
         state["model_fields_normalized"] = normalized
         if normalized:
             print(f"Normalized {normalized} turn_context model fields to {args.normalize_model}.", file=sys.stderr)
-
-    project_root = detect_project_root(records, source)
-    anchor_hash: str | None = None
-    anchor_source: str | None = None
-    if not args.no_anchor_refresh:
-        anchor_hash, anchor_path = refresh_anchors(
-            records,
-            state,
-            project_root,
-            AGENTS_PREFIX,
-            AGENTS_PLACEHOLDER,
-        )
-        if anchor_path is not None:
-            anchor_source = str(anchor_path)
-        if state.get("anchor_refreshed", 0) > 0:
-            print(f"Refreshed AGENTS.md in {state['anchor_refreshed']} turn_context records.", file=sys.stderr)
 
     if args.emit_compacted_spans:
         header, turns = split_session_objects(records)
@@ -1066,8 +1054,6 @@ def main() -> int:
         "manifest_path": str(manifest_path),
         "compaction_depth": depth,
         "model_switches": model_switches if model_switches else None,
-        "anchor_hash": anchor_hash,
-        "anchor_source": anchor_source,
         "changes": state,
         "policy": {
             "profile": args.profile,
@@ -1081,7 +1067,6 @@ def main() -> int:
             "warn_depth": args.warn_depth,
             "max_depth": args.max_depth,
             "normalize_model": args.normalize_model,
-            "anchor_refresh": not args.no_anchor_refresh,
         },
     }
     warnings = list(format_warnings)
@@ -1114,16 +1099,11 @@ def main() -> int:
     manifest["policy"]["compaction_depth"] = depth
     manifest["policy"]["warn_depth"] = args.warn_depth
     manifest["policy"]["max_depth"] = args.max_depth
-    manifest["policy"]["anchor_refresh"] = not args.no_anchor_refresh
     if args.normalize_model:
         manifest["policy"]["normalize_model"] = args.normalize_model
     manifest.setdefault("analysis", {})
     if model_switches:
         manifest["analysis"]["model_switches"] = model_switches
-    if anchor_hash is not None:
-        manifest["analysis"]["anchor_hash"] = anchor_hash
-    if anchor_source is not None:
-        manifest["analysis"]["anchor_source"] = anchor_source
 
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     marker_path = write_thread_marker(

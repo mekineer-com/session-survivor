@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import pathlib
-from typing import Any
 
 from lineage import extract_checkpoint_provenance
 
@@ -81,80 +79,3 @@ def compute_ancestor_depth(source: pathlib.Path) -> int:
         return int(provenance.get("ancestor_depth") or 0) + 1
     except Exception:
         return 1
-
-
-def find_agents_md_for_path(path: pathlib.Path) -> pathlib.Path | None:
-    current = path.expanduser().resolve()
-    if current.is_file():
-        current = current.parent
-    for parent in (current, *current.parents):
-        candidate = parent / "AGENTS.md"
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def detect_project_root(records: list[dict], source: pathlib.Path) -> pathlib.Path | None:
-    for obj in reversed(records):
-        if obj.get("type") != "turn_context":
-            continue
-        payload = obj.get("payload", {})
-        cwd = payload.get("cwd")
-        if not isinstance(cwd, str) or not cwd.startswith("/"):
-            continue
-        agents_path = find_agents_md_for_path(pathlib.Path(cwd))
-        if agents_path is not None:
-            return agents_path.parent
-    fallback_agents = find_agents_md_for_path(source)
-    if fallback_agents is not None:
-        return fallback_agents.parent
-    return None
-
-
-def load_workspace_agents_md(project_root: pathlib.Path | None) -> tuple[str | None, pathlib.Path | None]:
-    if project_root is None:
-        return None, None
-    agents_path = project_root / "AGENTS.md"
-    if not agents_path.exists():
-        return None, None
-    return agents_path.read_text(encoding="utf-8", errors="ignore"), agents_path
-
-
-def normalize_agents_instruction(scope: str, content: str, agents_prefix: str) -> str:
-    body = content.rstrip("\n")
-    return f"{agents_prefix}{scope}\n\n<INSTRUCTIONS>\n{body}\n</INSTRUCTIONS>"
-
-
-def refresh_anchors(
-    records: list[dict],
-    state: dict[str, int],
-    project_root: pathlib.Path | None,
-    agents_prefix: str,
-    agents_placeholder: str,
-) -> tuple[str | None, pathlib.Path | None]:
-    """Replace stale AGENTS.md copies in turn_context with current workspace version."""
-    current_agents, agents_path = load_workspace_agents_md(project_root)
-    if current_agents is None:
-        return None, None
-    refreshed = 0
-    for obj in records:
-        if obj.get("type") != "turn_context":
-            continue
-        payload = obj.get("payload", {})
-        instructions = payload.get("user_instructions")
-        if not isinstance(instructions, str):
-            continue
-        if instructions == agents_placeholder:
-            continue
-        if not instructions.startswith(agents_prefix):
-            continue
-        first_line = instructions.splitlines()[0]
-        scope = first_line[len(agents_prefix) :].strip()
-        if not scope:
-            scope = str(project_root or "")
-        desired = normalize_agents_instruction(scope, current_agents, agents_prefix)
-        if instructions != desired:
-            payload["user_instructions"] = desired
-            refreshed += 1
-    state["anchor_refreshed"] = refreshed
-    return hashlib.sha256(current_agents.encode("utf-8")).hexdigest()[:16], agents_path

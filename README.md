@@ -105,7 +105,7 @@ Session markers:
   - conservative Gemini compactor
   - currently `safe` only, plus `--show-summary` and `--show-lineage`
 - `codex_safety.py`
-  - depth guard, model switch detection, anchor refresh helpers for Codex compactor
+  - depth guard and model switch detection helpers for Codex compactor
 - `fix-codex-session.py`
   - one-off scrubber for model contamination inside `compacted.replacement_history`
   - two importable functions: `scrub_replacement_history_model`, `scrub_replacement_history_phrases`
@@ -182,6 +182,7 @@ Notes:
 
 - keeps full turn structure
 - trims bulky fields only
+- removes historical AGENTS instruction blobs from `turn_context.user_instructions` and `compacted.payload.replacement_history` (placeholdered)
 - intended as the first real swap candidate
 
 `resume`:
@@ -190,6 +191,11 @@ Notes:
 - keeps recent turns intact
 - emits per-run manifest data
 - intended for continuation on already-warm sessions
+
+Codex AGENTS handling:
+
+- no AGENTS refresh/injection from disk during compaction
+- historical copies are compacted away; a fresh AGENTS block is naturally reintroduced by the next live turn
 
 Observed runtime behavior:
 
