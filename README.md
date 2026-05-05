@@ -366,12 +366,10 @@ Session chaining (what this means):
 
 ## Files
 
-- `CODEX_COMPACTION.md`
-  - design notes from the original Codex-focused work
+- `CODEX_SESSION_ANALYSIS.md`
+  - current Codex failure-mode analysis and implemented safeguards
 - `CODEX_SESSION_COMPACTION_REPRO.md`
-  - exact reproduction procedure for the earlier Codex profile work
-
-These docs still use Codex-specific naming and should be generalized later.
+  - current Codex profile reproduction and manual swap runbook
 
 ## Limits
 
