@@ -157,12 +157,14 @@ def extract_message_text(content: Any) -> str:
     return "\n\n".join(chunks).strip()
 
 
-def is_turn_boundary(obj: dict[str, Any]) -> bool:
-    """Turn boundaries give the model temporal structure."""
+def turn_boundary_type(obj: dict[str, Any]) -> str:
+    """Return boundary event type that shapes turn timeline, else empty string."""
     if obj.get("type") != "event_msg":
-        return False
+        return ""
     ptype = obj.get("payload", {}).get("type", "")
-    return ptype in ("task_started", "task_complete")
+    if ptype in ("task_started", "task_complete", "turn_aborted"):
+        return ptype
+    return ""
 
 
 def compact_chat_records(
@@ -172,16 +174,27 @@ def compact_chat_records(
 ) -> list[dict[str, Any]]:
     compacted: list[dict[str, Any]] = []
     last_compacted_index: int | None = None
+    open_start_rows: list[int] = []
 
     for idx, obj in enumerate(records):
         if obj.get("type") == "compacted":
             last_compacted_index = idx
 
     for idx, obj in enumerate(records):
-        # Preserve turn boundaries (timestamps that mark when turns happened).
-        if is_turn_boundary(obj):
-            compacted.append(obj)
-            state["kept_turn_boundaries"] += 1
+        # Preserve turn boundaries (timestamps that mark when turns happened),
+        # while ensuring unresolved starts do not accumulate.
+        boundary = turn_boundary_type(obj)
+        if boundary:
+            if boundary == "task_started":
+                compacted.append(obj)
+                open_start_rows.append(len(compacted) - 1)
+                state["kept_turn_boundaries"] += 1
+            elif open_start_rows:
+                compacted.append(obj)
+                open_start_rows.pop()
+                state["kept_turn_boundaries"] += 1
+            else:
+                state["dropped_unmatched_boundary"] += 1
             continue
 
         # Keep only the most recent compacted record, but keep timeline order.
@@ -247,6 +260,12 @@ def compact_chat_records(
         )
         state["kept_chat_records"] += 1
 
+    if open_start_rows:
+        drop = set(open_start_rows)
+        compacted = [row for idx, row in enumerate(compacted) if idx not in drop]
+        state["dropped_unmatched_task_started"] += len(open_start_rows)
+        state["kept_turn_boundaries"] -= len(open_start_rows)
+
     return compacted
 
 
@@ -298,6 +317,8 @@ def main() -> int:
         "dropped_non_text": 0,
         "dropped_bootstrap_noise": 0,
         "dropped_meta_noise": 0,
+        "dropped_unmatched_boundary": 0,
+        "dropped_unmatched_task_started": 0,
         "messages_truncated": 0,
         "synthetic_timestamp_assigned": 0,
     }
@@ -345,7 +366,7 @@ def main() -> int:
             "profile": "codex-chat-resume-boundary-safe",
             "max_message_chars": args.max_message_chars,
             "kept_roles": ["user", "assistant"],
-            "kept_boundary_events": ["task_started", "task_complete"],
+            "kept_boundary_events": ["task_started", "task_complete", "turn_aborted"],
             "kept_compacted_anchor": "latest_only",
             "output_record_types": ["session_meta/header", "response_item.message", "event_msg.task_*", "compacted(latest)"],
         },
@@ -369,7 +390,7 @@ def main() -> int:
     manifest.setdefault("policy", {})
     manifest["policy"]["max_message_chars"] = args.max_message_chars
     manifest["policy"]["kept_roles"] = ["user", "assistant"]
-    manifest["policy"]["kept_boundary_events"] = ["task_started", "task_complete"]
+    manifest["policy"]["kept_boundary_events"] = ["task_started", "task_complete", "turn_aborted"]
     manifest["policy"]["kept_compacted_anchor"] = "latest_only"
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
