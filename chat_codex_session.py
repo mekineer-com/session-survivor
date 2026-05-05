@@ -9,6 +9,7 @@ import pathlib
 import sys
 from typing import Any
 
+from compact_codex_session import compact_record, core_format_warnings
 from lineage import build_compaction_manifest, describe_lineage
 
 
@@ -45,7 +46,19 @@ def parse_args() -> argparse.Namespace:
         "--safe-tail-turns",
         type=int,
         default=12,
-        help="Keep this many most recent turns in full native Codex schema.",
+        help="Keep this many most recent turns in native safe-compacted Codex schema.",
+    )
+    parser.add_argument(
+        "--max-tool-input-chars",
+        type=int,
+        default=400,
+        help="Keep at most this many chars of bulky function/custom tool inputs in safe tail.",
+    )
+    parser.add_argument(
+        "--max-reasoning-chars",
+        type=int,
+        default=240,
+        help="Keep at most this many chars of agent reasoning text in safe tail.",
     )
     parser.add_argument(
         "--show-summary",
@@ -287,6 +300,10 @@ def main() -> int:
         raise SystemExit("max-message-chars must be >= 80.")
     if args.safe_tail_turns < 1:
         raise SystemExit("safe-tail-turns must be >= 1.")
+    if args.max_tool_input_chars < 40:
+        raise SystemExit("max-tool-input-chars must be >= 40.")
+    if args.max_reasoning_chars < 40:
+        raise SystemExit("max-reasoning-chars must be >= 40.")
 
     if args.latest:
         source = latest_session(SESSION_ROOT)
@@ -323,7 +340,6 @@ def main() -> int:
     state = {
         "kept_chat_records": 0,
         "kept_header_records": 0,
-        "kept_turn_boundaries": 0,
         "kept_compacted_anchor": 0,
         "kept_safe_tail_turns": 0,
         "kept_safe_tail_records": 0,
@@ -335,12 +351,23 @@ def main() -> int:
         "dropped_bootstrap_noise": 0,
         "dropped_meta_noise": 0,
         "dropped_unmatched_boundary": 0,
-        "dropped_unmatched_task_started": 0,
         "messages_truncated": 0,
         "synthetic_timestamp_assigned": 0,
+        "safe_tail_reasoning_encrypted_removed": 0,
+        "safe_tail_tool_outputs_truncated": 0,
+        "safe_tail_tool_inputs_truncated": 0,
+        "safe_tail_agent_reasoning_truncated": 0,
+        "safe_tail_duplicated_instruction_messages": 0,
+        "safe_tail_scratch_artifacts_removed": 0,
     }
 
+    format_warnings = core_format_warnings(records)
+    if format_warnings:
+        raise SystemExit("Input session format drift: " + " | ".join(format_warnings))
+
     header_rows, turns = split_session_objects(records)
+    if not turns:
+        raise SystemExit("Input session has no task_started turns; refusing chat compaction output.")
     state["kept_header_records"] = len(header_rows)
 
     safe_tail_turns = min(args.safe_tail_turns, len(turns))
@@ -351,8 +378,27 @@ def main() -> int:
 
     old_rows = [obj for turn in old_turns for obj in turn]
     chat_rows = compact_chat_records(old_rows, args, state) if old_rows else []
-    safe_tail_rows = [obj for turn in tail_turns for obj in turn]
+
+    safe_tail_state = {
+        "reasoning_encrypted_removed": 0,
+        "tool_outputs_truncated": 0,
+        "tool_inputs_truncated": 0,
+        "agent_reasoning_truncated": 0,
+        "duplicated_instruction_messages": 0,
+        "scratch_artifacts_removed": 0,
+    }
+    safe_tail_rows: list[dict[str, Any]] = []
+    for turn in tail_turns:
+        for obj in turn:
+            safe_tail_rows.append(compact_record(obj, args, safe_tail_state))
+
     state["kept_safe_tail_records"] = len(safe_tail_rows)
+    state["safe_tail_reasoning_encrypted_removed"] = safe_tail_state["reasoning_encrypted_removed"]
+    state["safe_tail_tool_outputs_truncated"] = safe_tail_state["tool_outputs_truncated"]
+    state["safe_tail_tool_inputs_truncated"] = safe_tail_state["tool_inputs_truncated"]
+    state["safe_tail_agent_reasoning_truncated"] = safe_tail_state["agent_reasoning_truncated"]
+    state["safe_tail_duplicated_instruction_messages"] = safe_tail_state["duplicated_instruction_messages"]
+    state["safe_tail_scratch_artifacts_removed"] = safe_tail_state["scratch_artifacts_removed"]
 
     if not header_rows and not chat_rows and not safe_tail_rows:
         raise SystemExit("No records survived filtering; refusing to write empty output file.")
@@ -394,6 +440,8 @@ def main() -> int:
             "profile": "codex-chat-resume-hybrid-safe-tail",
             "max_message_chars": args.max_message_chars,
             "safe_tail_turns": args.safe_tail_turns,
+            "max_tool_input_chars": args.max_tool_input_chars,
+            "max_reasoning_chars": args.max_reasoning_chars,
             "kept_roles": ["user", "assistant"],
             "kept_boundary_events": ["task_started", "task_complete", "turn_aborted"],
             "kept_compacted_anchor": "latest_only_for_compacted_history",
@@ -423,6 +471,8 @@ def main() -> int:
     manifest.setdefault("policy", {})
     manifest["policy"]["max_message_chars"] = args.max_message_chars
     manifest["policy"]["safe_tail_turns"] = args.safe_tail_turns
+    manifest["policy"]["max_tool_input_chars"] = args.max_tool_input_chars
+    manifest["policy"]["max_reasoning_chars"] = args.max_reasoning_chars
     manifest["policy"]["kept_roles"] = ["user", "assistant"]
     manifest["policy"]["kept_boundary_events"] = ["task_started", "task_complete", "turn_aborted"]
     manifest["policy"]["kept_compacted_anchor"] = "latest_only_for_compacted_history"

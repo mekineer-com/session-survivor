@@ -119,6 +119,7 @@ Session markers:
   - supports `safe`, `resume`, and `--show-lineage`
 - `chat_codex_session.py`
   - Codex hybrid chat extractor for resume: chat-only old history + native safe tail
+  - safe tail rows are compacted with Codex `safe` rules (tool/output trimming, reasoning cleanup)
   - supports `--latest`, `--show-summary`, and `--show-lineage`
 - `compact_claude_session.py`
   - conservative Claude compactor
@@ -233,8 +234,10 @@ Notes:
     - latest native `type="compacted"` record (anchor)
     - `response_item` where `payload.type=message` and `payload.role` is `user` or `assistant`
     - historical turn-boundary events are intentionally dropped to avoid replaying old interruption banners
-  - native safe tail window (full original records per turn: `event_msg`, `response_item`, `turn_context`, `compacted`)
+  - native safe tail window (`event_msg`, `response_item`, `turn_context`, `compacted`) compacted with Codex `safe` policy
   - default tail size: last `12` turns (`--safe-tail-turns`)
+  - tail compaction controls: `--max-tool-input-chars`, `--max-reasoning-chars`
+  - fail-loud behavior: refuses input with Codex format drift/no `task_started` turns
 - usage:
   - `python3 chat_codex_session.py --latest --show-summary`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl`
