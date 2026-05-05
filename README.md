@@ -205,60 +205,56 @@ Notes:
 
 ### Codex
 
-`safe`:
+Use this order:
 
-- keeps full turn structure
-- replaces tool-output text payloads with compact markers
-- removes historical AGENTS instruction blobs from `turn_context.user_instructions` and `compacted.payload.replacement_history` (placeholdered)
-- preserves `response_item.message` chat content verbatim
-- scrubs AGENTS/scratch contamination only in metadata/synthetic fields (`event_msg.*`, compacted payloads)
-- intended as the first real swap candidate
+1. `safe` first (lowest risk).
+2. `resume` if you need stronger compaction.
+3. `chat-resume-hybrid-safe-tail` when old non-chat history is the main source of context rot.
 
-`resume`:
+`safe` (first live-swap candidate):
 
-- collapses older history into a checkpointed compacted span
-- keeps recent turns intact
-- emits per-run manifest data
-- skips contaminated assistant scratch/tool-transcript text while building synthetic checkpoint/replacement history
-- removes embedded historical AGENTS blobs in metadata/synthetic paths
-- intended for continuation on already-warm sessions
+- keeps normal turn structure
+- keeps chat messages as-is
+- trims heavy payloads (reasoning blobs, large tool output/input)
+- compacts repeated AGENTS/scratch text in metadata and synthetic paths
+
+`resume` (more aggressive):
+
+- keeps recent turns native
+- compresses older turns into one compacted checkpoint span
+- keeps bounded `replacement_history`
+- writes report/manifest metadata for auditing
 
 `chat-resume-hybrid-safe-tail` (`chat_codex_session.py`):
 
-- purpose:
-  - keep all user/assistant conversation text from Codex rollout JSONL
-  - keep old history lightweight while preserving a fully native recent tail for resume continuity
-- kept records:
-  - native header rows before first turn (for example `session_meta`)
-  - chat-compacted old turns:
-    - latest native `type="compacted"` record (anchor)
-    - `response_item` where `payload.type=message` and `payload.role` is `user` or `assistant`
-    - historical turn-boundary events are intentionally dropped to avoid replaying old interruption banners
-  - native safe tail window (`event_msg`, `response_item`, `turn_context`, `compacted`) compacted with Codex `safe` policy
-  - default tail size: last `1` turn (`--safe-tail-turns`)
-  - tail compaction controls: `--max-tool-input-chars`, `--max-reasoning-chars`
-  - fail-loud behavior: refuses input with Codex format drift/no `task_started` turns
+- old history becomes chat-focused (`user`/`assistant` text)
+- keeps newest old-history native compacted anchor (`type="compacted"`)
+- keeps a native safe-compacted recent tail (`--safe-tail-turns`, default `1`)
+- drops old boundary-event spam from the historical section
+- fails loud on format drift or missing `task_started` turns
+- tail compaction knobs: `--max-tool-input-chars`, `--max-reasoning-chars`
+- source selection rule: use exactly one source (`--latest` or explicit path)
 - usage:
   - `python3 chat_codex_session.py --latest --show-summary`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl --safe-tail-turns 8`
-  - choose exactly one source selector: `--latest` or explicit session path
+
+Codex guardrails in `compact_codex_session.py`:
+
+- depth policy: warn at `--warn-depth` (default `6`), stop at `--max-depth` (default `10`) unless `--force`
+- model-switch detection is always on and recorded in report/manifest
+- model rewriting is opt-in with `--normalize-model MODEL`
 
 Codex AGENTS handling:
 
 - no AGENTS refresh/injection from disk during compaction
-- historical copies are compacted away; a fresh AGENTS block is naturally reintroduced by the next live turn
+- historical AGENTS copies are compacted away; a fresh AGENTS block is naturally reintroduced on later live turns
 
-Observed runtime behavior:
+Runtime note:
 
-- on very long live Codex sessions, native background compaction can sometimes raise the "context remaining" meter much more than expected
-- in one real session, the jump was on the order of ~50%, whereas earlier background jumps had usually been much smaller
-- do not interpret that as proof of a magically larger true context window
-- the safer explanation is that the live context became much more compressible:
-  - more native `compacted` / `context_compacted` history already in the rollout
-  - less irreducible hot-state baggage
-  - better external anchors like a shorter handoff file
-- trust the jump directionally, not literally; the real test is whether factual continuity still holds after the jump
+- on long sessions, native background compaction can raise the "context remaining" meter more than expected
+- treat the jump as directional, not literal proof of a larger true context window
+- the real check is factual continuity after the jump
 
 ### Claude
 
