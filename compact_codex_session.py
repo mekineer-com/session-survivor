@@ -33,7 +33,7 @@ SCRATCH_PLACEHOLDER = (
     "[Compacted internal scratch/tool transcript removed for resume integrity.]"
 )
 PATCH_PLACEHOLDER = "[Compacted tool input"
-OUTPUT_PLACEHOLDER = "[Compacted tool output"
+OUTPUT_PLACEHOLDER = "[Tool output"
 REASONING_PLACEHOLDER = "[Compacted agent reasoning"
 MAX_COMPACTED_REPLACEMENT_HISTORY = 8
 WORKSPACE_ROOT = pathlib.Path("/home/marcos/apps-codex")
@@ -237,7 +237,7 @@ def shorten(text: str, max_chars: int, label: str) -> tuple[str, bool]:
 
 
 def remove_text(text: str, label: str) -> str:
-    return f"{label} removed; original length={len(text)} chars]"
+    return f"{label} compacted to marker; original length={len(text)} chars]"
 
 
 def compact_content_text(text: str, state: dict[str, int]) -> str:
