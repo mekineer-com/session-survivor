@@ -45,7 +45,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--safe-tail-turns",
         type=int,
-        default=12,
+        default=1,
         help="Keep this many most recent turns in native safe-compacted Codex schema.",
     )
     parser.add_argument(

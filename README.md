@@ -235,7 +235,7 @@ Notes:
     - `response_item` where `payload.type=message` and `payload.role` is `user` or `assistant`
     - historical turn-boundary events are intentionally dropped to avoid replaying old interruption banners
   - native safe tail window (`event_msg`, `response_item`, `turn_context`, `compacted`) compacted with Codex `safe` policy
-  - default tail size: last `12` turns (`--safe-tail-turns`)
+  - default tail size: last `1` turn (`--safe-tail-turns`)
   - tail compaction controls: `--max-tool-input-chars`, `--max-reasoning-chars`
   - fail-loud behavior: refuses input with Codex format drift/no `task_started` turns
 - usage:
