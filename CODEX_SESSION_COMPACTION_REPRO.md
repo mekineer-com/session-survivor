@@ -1,8 +1,12 @@
 # Codex Session Compaction Reproduction
 
-## Purpose
+This is the practical runbook for comparing Codex compaction profiles safely.
+Use it when you want repeatable tests, not one-off guesses.
 
-Operational runbook for reproducing Codex compaction profiles from the same frozen source snapshot.
+## Plain-English Goal
+
+You want to compare profile outputs from the same exact source file.
+If you compare runs from different live moments, the session changed under you and results are not comparable.
 
 ## Tools
 
@@ -14,38 +18,40 @@ Operational runbook for reproducing Codex compaction profiles from the same froz
 
 ### `safe`
 
-Use as first swap candidate.
+Use this first.
+It is the least risky live swap candidate.
 
-Behavior:
+What it does:
 
-- keeps full turn structure
+- keeps normal turn structure
 - keeps line count stable relative to source
-- trims bulky fields only (reasoning blobs, large tool output/input, duplicated historical AGENTS payloads)
+- trims bulk only (reasoning blobs, large tool output/input, repeated AGENTS payloads)
 
 ### `resume`
 
-Use for aggressive continuation experiments.
+Use this when you need stronger size reduction and accept more change.
 
-Behavior:
+What it does:
 
-- keeps a recent native tail intact
-- collapses older turns into a synthetic compacted checkpoint
+- keeps a recent native tail
+- compresses older turns into one synthetic compacted checkpoint
 - keeps bounded `replacement_history`
 
 ### `chat-resume-hybrid-safe-tail`
 
-Use when context rot is driven by heavy non-chat history.
+Use this when old non-chat history is the main problem.
 
-Behavior:
+What it does:
 
-- keeps chat text for older history (`user` and `assistant` messages)
-- keeps the newest native compacted anchor from old history
-- drops old boundary-event spam from historical section
+- keeps old chat text (`user` and `assistant`)
+- keeps the newest old-history native compacted anchor
+- drops old boundary-event spam from old history
 - keeps a native safe-compacted tail (`--safe-tail-turns`, default `1`)
 
 ## Critical Reproduction Rule
 
-Do not compare profiles from independently captured live files.
+Do not compare runs from different live captures.
+Freeze once, then run all profiles on that frozen source.
 
 Correct method:
 
@@ -74,7 +80,7 @@ Run root format:
 
 - `/home/marcos/apps-codex/session-survivor/outputs/repro/<timestamp>/...`
 
-## Report Review Order
+## How To Review Results Fast
 
 For `safe`:
 

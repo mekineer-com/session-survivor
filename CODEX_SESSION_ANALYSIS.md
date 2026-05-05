@@ -2,25 +2,26 @@
 
 ## Scope
 
-This file documents stable findings about Codex session behavior and what session-survivor currently does to reduce context rot safely.
+This file explains what usually goes wrong in long Codex sessions and which protections are already implemented in `session-survivor`.
+It is written for operators using agentic CLI day to day.
 
-## Structural Facts That Must Hold
+## One Rule You Must Not Break
 
 - `event_msg.payload.type == task_started` records are turn boundaries.
 - Removing all `task_started` records breaks turn parsing for compaction logic.
-- `task_complete` and `context_compacted` are useful continuity signals and should be preserved in native-tail workflows.
+- `task_complete` and `context_compacted` help continuity and should stay in native-tail workflows.
 
-## Common Failure Modes
+## Common Failure Modes (In Plain Terms)
 
 - Model-switch contamination:
-  - mixed-model stretches can bias later behavior after compaction
-  - stale instructions and behavior traces can persist inside compacted replacement history
+  - one model's behavior can leak into later context after compaction
+  - stale traces can stick inside compacted replacement history
 - Instruction duplication:
-  - repeated AGENTS payloads bloat history and can over-prime stale rules
+  - repeated AGENTS payloads make files bigger and can over-prime old rules
 - Scratch/tool transcript contamination:
-  - internal scratch text in assistant messages can pollute synthetic summaries
+  - internal scratch text can pollute synthetic summaries
 - Depth drift:
-  - repeated compaction-on-compaction can gradually degrade detail quality
+  - repeated compaction-on-compaction slowly degrades detail quality
 
 ## Current Safeguards (Implemented)
 
@@ -50,14 +51,14 @@ In [chat_codex_session.py](/home/marcos/apps-codex/session-survivor/chat_codex_s
 
 In [fix-codex-session.py](/home/marcos/apps-codex/session-survivor/fix-codex-session.py):
 
-- targeted replacement-history scrub functions for contamination not covered by `--normalize-model`.
+- targeted replacement-history scrub helpers for contamination not covered by `--normalize-model`.
 
-## Operational Guidance
+## Operator Guidance
 
-- First-line live candidate: `safe`.
-- Use `resume` and `chat-resume-hybrid-safe-tail` for explicit continuation recovery workflows.
-- Always compact from a frozen snapshot when comparing profiles.
-- Keep destructive rewrites opt-in; preserve forensics by default.
+- Start with `safe` for live swaps.
+- Use `resume` or `chat-resume-hybrid-safe-tail` only when you need deeper cleanup.
+- For profile comparison, always freeze once and run all profiles from that frozen file.
+- Keep destructive rewrites opt-in so forensics stay intact by default.
 
 ## Known Limits
 
