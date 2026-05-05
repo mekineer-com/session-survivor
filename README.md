@@ -18,7 +18,7 @@ Current support:
   - `--show-summary`
   - `--show-lineage`
 - Codex JSONL
-  - `chat-plus-window`
+  - `chat-resume-boundary-safe`
   - `--show-summary`
   - `--show-lineage`
 - Gemini JSON
@@ -50,7 +50,7 @@ The goal is to reduce that bulk while preserving what matters for continuation:
 
 ## Quick start
 
-Codex `safe` + `resume` + `chat-plus-window` from the latest session:
+Codex `safe` + `resume` + `chat-resume-boundary-safe` from the latest session:
 
 ```sh
 ./reproduce_codex_session_profiles.sh --latest
@@ -118,7 +118,7 @@ Session markers:
   - main Codex compactor
   - supports `safe`, `resume`, and `--show-lineage`
 - `chat_codex_session.py`
-  - Codex continuity extractor: full user+assistant chat + safe-compacted sidecar window
+  - Codex chat extractor for resume: user+assistant chat + native turn boundaries + latest compacted anchor
   - supports `--latest`, `--show-summary`, and `--show-lineage`
 - `compact_claude_session.py`
   - conservative Claude compactor
@@ -139,7 +139,7 @@ Session markers:
 - `lineage.py`
   - provenance and parent/child session lineage helpers
 - `reproduce_codex_session_profiles.sh`
-  - runs `safe`, then `resume` from the same frozen snapshot, plus `chat-plus-window` from source
+  - runs `safe`, then `resume` from the same frozen snapshot, plus `chat-resume-boundary-safe` from source
 - `reproduce_claude_safe.sh`
   - runs Claude `safe` against the latest JSONL in the active Claude project folder
 
@@ -222,19 +222,17 @@ Notes:
 - removes embedded historical AGENTS blobs in metadata/synthetic paths
 - intended for continuation on already-warm sessions
 
-`chat-plus-window` (`chat_codex_session.py`):
+`chat-resume-boundary-safe` (`chat_codex_session.py`):
 
 - purpose:
   - keep all user/assistant conversation text from Codex rollout JSONL
-  - add a safe-compacted continuity sidecar from the latest pre-compaction window
+  - preserve minimal temporal anchors needed for resume parsing
 - kept records:
+  - native header rows before first turn (for example `session_meta`)
+  - `event_msg` turn boundaries: `task_started`, `task_complete`
+  - latest native `type="compacted"` record (anchor)
   - `response_item` where `payload.type=message` and `payload.role` is `user` or `assistant`
-  - output row shape: `{"type":"chat_message","timestamp","role","phase","text"}`
-  - continuity row shape: `{"type":"continuity_record","timestamp","source_window_index","record"}`
-- continuity window rule:
-  - between the last two native `type="compacted"` markers
-  - fallback: after the last marker if only one exists
-  - warning is emitted in report when fallback is used
+  - emitted as native `response_item` rows (not custom row types)
 - usage:
   - `python3 chat_codex_session.py --latest --show-summary`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl`

@@ -9,20 +9,19 @@ import pathlib
 import sys
 from typing import Any
 
-from compact_codex_session import compact_record
 from lineage import build_compaction_manifest, describe_lineage
 
 
 SESSION_ROOT = pathlib.Path.home() / ".codex" / "sessions"
-DEFAULT_OUTPUT_ROOT = pathlib.Path("/home/marcos/apps-codex/session-survivor/outputs/codex-chat-plus-window")
+DEFAULT_OUTPUT_ROOT = pathlib.Path("/home/marcos/apps-codex/session-survivor/outputs/codex-chat-resume-boundary-safe")
 PLACEHOLDER = "[Compacted Codex chat message"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Create a Codex continuity copy: keep full user/assistant conversation text, "
-            "plus a safe-compacted sidecar for the latest pre-compaction window."
+            "Create a Codex chat-resume copy: keep user/assistant text, "
+            "turn boundaries, and the latest compacted anchor."
         )
     )
     parser.add_argument("session", nargs="?", help="Path to a Codex rollout JSONL file.")
@@ -158,13 +157,34 @@ def extract_message_text(content: Any) -> str:
     return "\n\n".join(chunks).strip()
 
 
+def is_turn_boundary(obj: dict[str, Any]) -> bool:
+    """Turn boundaries give the model temporal structure."""
+    if obj.get("type") != "event_msg":
+        return False
+    ptype = obj.get("payload", {}).get("type", "")
+    return ptype in ("task_started", "task_complete")
+
+
 def compact_chat_records(
     records: list[dict[str, Any]],
     args: argparse.Namespace,
     state: dict[str, int],
 ) -> list[dict[str, Any]]:
     compacted: list[dict[str, Any]] = []
+    last_compacted_record: dict[str, Any] | None = None
+
     for obj in records:
+        # Preserve turn boundaries (timestamps that mark when turns happened).
+        if is_turn_boundary(obj):
+            compacted.append(obj)
+            state["kept_turn_boundaries"] += 1
+            continue
+
+        # Keep the most recent compacted record as the "you are here" anchor.
+        if obj.get("type") == "compacted":
+            last_compacted_record = obj
+            continue
+
         if obj.get("type") != "response_item":
             state["dropped_non_response_item"] += 1
             continue
@@ -202,78 +222,30 @@ def compact_chat_records(
             timestamp = "1970-01-01T00:00:00.000Z"
             state["synthetic_timestamp_assigned"] += 1
 
+        # Emit native Codex message records so resume can parse the file.
+        content_type = "output_text" if role == "assistant" else "input_text"
+        new_payload: dict[str, Any] = {
+            "type": "message",
+            "role": role,
+            "content": [{"type": content_type, "text": text}],
+        }
+        phase = payload.get("phase")
+        if isinstance(phase, str) and phase:
+            new_payload["phase"] = phase
         compacted.append(
             {
-                "type": "chat_message",
+                "type": "response_item",
                 "timestamp": timestamp,
-                "role": role,
-                "phase": payload.get("phase"),
-                "text": text,
+                "payload": new_payload,
             }
         )
         state["kept_chat_records"] += 1
+
+    if last_compacted_record is not None:
+        compacted.append(last_compacted_record)
+        state["kept_compacted_anchor"] += 1
+
     return compacted
-
-
-def find_compaction_markers(records: list[dict[str, Any]]) -> list[int]:
-    markers: list[int] = []
-    for idx, obj in enumerate(records):
-        if obj.get("type") == "compacted":
-            markers.append(idx)
-    return markers
-
-
-def continuity_window_bounds(records: list[dict[str, Any]]) -> tuple[int | None, int | None, str]:
-    markers = find_compaction_markers(records)
-    if len(markers) >= 2:
-        return markers[-2] + 1, markers[-1], "between_last_two_compactions"
-    if len(markers) == 1:
-        return markers[0] + 1, len(records), "after_last_compaction_fallback"
-    return None, None, "no_compaction_marker"
-
-
-def build_safe_continuity_records(
-    records: list[dict[str, Any]],
-    start_idx: int,
-    end_idx: int,
-    state: dict[str, int],
-) -> list[dict[str, Any]]:
-    safe_args = argparse.Namespace(
-        profile="safe",
-        max_tool_input_chars=400,
-        max_reasoning_chars=240,
-    )
-    safe_state = {
-        "reasoning_encrypted_removed": 0,
-        "tool_outputs_truncated": 0,
-        "tool_inputs_truncated": 0,
-        "agent_reasoning_truncated": 0,
-        "duplicated_instruction_messages": 0,
-        "scratch_artifacts_removed": 0,
-    }
-    out: list[dict[str, Any]] = []
-    for idx in range(start_idx, end_idx):
-        safe_obj = compact_record(records[idx], safe_args, safe_state)
-        timestamp = safe_obj.get("timestamp")
-        if not isinstance(timestamp, str) or not timestamp:
-            timestamp = "1970-01-01T00:00:00.000Z"
-            state["synthetic_timestamp_assigned"] += 1
-        out.append(
-            {
-                "type": "continuity_record",
-                "timestamp": timestamp,
-                "source_window_index": idx,
-                "record": safe_obj,
-            }
-        )
-    state["continuity_records_kept"] = len(out)
-    state["continuity_reasoning_encrypted_removed"] = safe_state["reasoning_encrypted_removed"]
-    state["continuity_tool_outputs_compacted"] = safe_state["tool_outputs_truncated"]
-    state["continuity_tool_inputs_compacted"] = safe_state["tool_inputs_truncated"]
-    state["continuity_agent_reasoning_compacted"] = safe_state["agent_reasoning_truncated"]
-    state["continuity_dup_instruction_compacted"] = safe_state["duplicated_instruction_messages"]
-    state["continuity_scratch_compacted"] = safe_state["scratch_artifacts_removed"]
-    return out
 
 
 def main() -> int:
@@ -315,6 +287,9 @@ def main() -> int:
 
     state = {
         "kept_chat_records": 0,
+        "kept_header_records": 0,
+        "kept_turn_boundaries": 0,
+        "kept_compacted_anchor": 0,
         "dropped_non_response_item": 0,
         "dropped_non_message": 0,
         "dropped_non_chat_role": 0,
@@ -323,25 +298,24 @@ def main() -> int:
         "dropped_meta_noise": 0,
         "messages_truncated": 0,
         "synthetic_timestamp_assigned": 0,
-        "continuity_records_kept": 0,
-        "continuity_reasoning_encrypted_removed": 0,
-        "continuity_tool_outputs_compacted": 0,
-        "continuity_tool_inputs_compacted": 0,
-        "continuity_agent_reasoning_compacted": 0,
-        "continuity_dup_instruction_compacted": 0,
-        "continuity_scratch_compacted": 0,
     }
+
+    # Preserve native header records (session_meta etc.) — required for Codex CLI resume.
+    header_rows: list[dict[str, Any]] = []
+    for obj in records:
+        if obj.get("type") == "event_msg" and obj.get("payload", {}).get("type") == "task_started":
+            break
+        header_rows.append(obj)
+    state["kept_header_records"] = len(header_rows)
+
     chat_rows = compact_chat_records(records, args, state)
     if not chat_rows:
         raise SystemExit("No chat records survived filtering; refusing to write empty output file.")
-    window_start, window_end, window_kind = continuity_window_bounds(records)
-    continuity_rows: list[dict[str, Any]] = []
-    if window_start is not None and window_end is not None and window_end > window_start:
-        continuity_rows = build_safe_continuity_records(records, window_start, window_end, state)
 
-    compacted = chat_rows + continuity_rows
     with compacted_copy.open("w", encoding="utf-8") as dst:
-        for row in compacted:
+        for row in header_rows:
+            dst.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+        for row in chat_rows:
             dst.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
 
     compacted_validation = validate_jsonl(compacted_copy)
@@ -362,22 +336,14 @@ def main() -> int:
         "compacted_lines": compacted_validation["line_count"],
         "manifest_path": str(manifest_path),
         "changes": state,
-        "warnings": [] if window_kind == "between_last_two_compactions" else [
-            f"Continuity window fallback used: {window_kind}"
-        ],
-        "continuity_window": {
-            "kind": window_kind,
-            "start_index": window_start,
-            "end_index": window_end,
-            "record_count": len(continuity_rows),
-        },
+        "warnings": [],
         "policy": {
-            "profile": "codex-chat-plus-last-window-safe",
+            "profile": "codex-chat-resume-boundary-safe",
             "max_message_chars": args.max_message_chars,
             "kept_roles": ["user", "assistant"],
-            "kept_chat_record_shape": "chat_message",
-            "continuity_record_shape": "continuity_record",
-            "continuity_window_rule": "between last compaction marker and previous one; fallback to after-last marker",
+            "kept_boundary_events": ["task_started", "task_complete"],
+            "kept_compacted_anchor": "latest_only",
+            "output_record_types": ["session_meta/header", "response_item.message", "event_msg.task_*", "compacted(latest)"],
         },
     }
 
@@ -388,7 +354,7 @@ def main() -> int:
         report_path=report_path,
         source_sha256=original_sha256,
         compacted_sha256=compacted_sha256,
-        profile="codex-chat-plus-last-window-safe",
+        profile="codex-chat-resume-boundary-safe",
         generated_at=generated_at,
         original_lines=original_validation["line_count"],
         compacted_lines=compacted_validation["line_count"],
@@ -399,12 +365,8 @@ def main() -> int:
     manifest.setdefault("policy", {})
     manifest["policy"]["max_message_chars"] = args.max_message_chars
     manifest["policy"]["kept_roles"] = ["user", "assistant"]
-    manifest["policy"]["continuity_window"] = {
-        "kind": window_kind,
-        "start_index": window_start,
-        "end_index": window_end,
-        "record_count": len(continuity_rows),
-    }
+    manifest["policy"]["kept_boundary_events"] = ["task_started", "task_complete"]
+    manifest["policy"]["kept_compacted_anchor"] = "latest_only"
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
