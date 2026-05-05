@@ -30,7 +30,6 @@ Current non-goals:
 
 - fully automated swap/rollback
 - polished packaging
-- full-fidelity Claude `resume`
 
 ## Why this exists
 

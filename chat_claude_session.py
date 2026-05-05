@@ -253,6 +253,8 @@ def compact_chat_records(
         compacted.append(kept_title)
         state["kept_custom_title"] += 1
 
+    last_kept_uuid: str | None = None
+
     for line_no, obj in enumerate(records, 1):
         item_type = obj.get("type")
         if item_type == "custom-title":
@@ -310,6 +312,13 @@ def compact_chat_records(
             },
         }
         row.update(chat_envelope_fields(obj, session_defaults))
+        # Rewrite parentUuid to point to previous kept record, not removed intermediates.
+        if last_kept_uuid is not None:
+            row["parentUuid"] = last_kept_uuid
+        else:
+            row.pop("parentUuid", None)
+        last_kept_uuid = message_uuid
+
         compacted.append(row)
         state["kept_chat_records"] += 1
 
