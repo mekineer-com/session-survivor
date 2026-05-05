@@ -242,6 +242,7 @@ Notes:
   - `python3 chat_codex_session.py --latest --show-summary`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl --safe-tail-turns 8`
+  - choose exactly one source selector: `--latest` or explicit session path
 
 Codex AGENTS handling:
 

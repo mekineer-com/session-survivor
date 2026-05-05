@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--latest",
         action="store_true",
-        help="Use the latest rollout JSONL under ~/.codex/sessions.",
+        help="Use the latest rollout JSONL under ~/.codex/sessions (mutually exclusive with SESSION path).",
     )
     parser.add_argument(
         "--output-root",
@@ -225,7 +225,7 @@ def compact_chat_records(
         # turn_aborted markers do not spam resume UI with interruption banners.
         boundary = turn_boundary_type(obj)
         if boundary:
-            state["dropped_unmatched_boundary"] += 1
+            state["dropped_old_boundary_events"] += 1
             continue
 
         # Keep only the most recent compacted record, but keep timeline order.
@@ -304,6 +304,8 @@ def main() -> int:
         raise SystemExit("max-tool-input-chars must be >= 40.")
     if args.max_reasoning_chars < 40:
         raise SystemExit("max-reasoning-chars must be >= 40.")
+    if args.latest and args.session:
+        raise SystemExit("Use either --latest or a session path, not both.")
 
     if args.latest:
         source = latest_session(SESSION_ROOT)
@@ -350,7 +352,7 @@ def main() -> int:
         "dropped_non_text": 0,
         "dropped_bootstrap_noise": 0,
         "dropped_meta_noise": 0,
-        "dropped_unmatched_boundary": 0,
+        "dropped_old_boundary_events": 0,
         "messages_truncated": 0,
         "synthetic_timestamp_assigned": 0,
         "safe_tail_reasoning_encrypted_removed": 0,
@@ -443,8 +445,9 @@ def main() -> int:
             "max_tool_input_chars": args.max_tool_input_chars,
             "max_reasoning_chars": args.max_reasoning_chars,
             "kept_roles": ["user", "assistant"],
-            "kept_boundary_events": ["task_started", "task_complete", "turn_aborted"],
             "kept_compacted_anchor": "latest_only_for_compacted_history",
+            "chat_history_dropped_event_types": ["task_started", "task_complete", "turn_aborted"],
+            "safe_tail_kept_record_types": ["event_msg", "response_item", "turn_context", "compacted"],
             "output_record_types": [
                 "session_meta/header",
                 "chat-compacted-history(response_item.message + compacted(latest))",
@@ -474,8 +477,9 @@ def main() -> int:
     manifest["policy"]["max_tool_input_chars"] = args.max_tool_input_chars
     manifest["policy"]["max_reasoning_chars"] = args.max_reasoning_chars
     manifest["policy"]["kept_roles"] = ["user", "assistant"]
-    manifest["policy"]["kept_boundary_events"] = ["task_started", "task_complete", "turn_aborted"]
     manifest["policy"]["kept_compacted_anchor"] = "latest_only_for_compacted_history"
+    manifest["policy"]["chat_history_dropped_event_types"] = ["task_started", "task_complete", "turn_aborted"]
+    manifest["policy"]["safe_tail_kept_record_types"] = ["event_msg", "response_item", "turn_context", "compacted"]
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
