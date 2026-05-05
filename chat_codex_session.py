@@ -171,18 +171,24 @@ def compact_chat_records(
     state: dict[str, int],
 ) -> list[dict[str, Any]]:
     compacted: list[dict[str, Any]] = []
-    last_compacted_record: dict[str, Any] | None = None
+    last_compacted_index: int | None = None
 
-    for obj in records:
+    for idx, obj in enumerate(records):
+        if obj.get("type") == "compacted":
+            last_compacted_index = idx
+
+    for idx, obj in enumerate(records):
         # Preserve turn boundaries (timestamps that mark when turns happened).
         if is_turn_boundary(obj):
             compacted.append(obj)
             state["kept_turn_boundaries"] += 1
             continue
 
-        # Keep the most recent compacted record as the "you are here" anchor.
+        # Keep only the most recent compacted record, but keep timeline order.
         if obj.get("type") == "compacted":
-            last_compacted_record = obj
+            if last_compacted_index is not None and idx == last_compacted_index:
+                compacted.append(obj)
+                state["kept_compacted_anchor"] += 1
             continue
 
         if obj.get("type") != "response_item":
@@ -241,10 +247,6 @@ def compact_chat_records(
         )
         state["kept_chat_records"] += 1
 
-    if last_compacted_record is not None:
-        compacted.append(last_compacted_record)
-        state["kept_compacted_anchor"] += 1
-
     return compacted
 
 
@@ -302,13 +304,15 @@ def main() -> int:
 
     # Preserve native header records (session_meta etc.) — required for Codex CLI resume.
     header_rows: list[dict[str, Any]] = []
-    for obj in records:
+    header_end = len(records)
+    for idx, obj in enumerate(records):
         if obj.get("type") == "event_msg" and obj.get("payload", {}).get("type") == "task_started":
+            header_end = idx
             break
         header_rows.append(obj)
     state["kept_header_records"] = len(header_rows)
 
-    chat_rows = compact_chat_records(records, args, state)
+    chat_rows = compact_chat_records(records[header_end:], args, state)
     if not chat_rows:
         raise SystemExit("No chat records survived filtering; refusing to write empty output file.")
 
