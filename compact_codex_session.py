@@ -287,11 +287,7 @@ def compact_content_text_with_policy(
     role: str | None = None,
 ) -> str:
     compacted = compact_content_text(text, state)
-    if (
-        args.profile == "resume"
-        and role == "assistant"
-        and looks_scratch_artifact(compacted)
-    ):
+    if role == "assistant" and looks_scratch_artifact(compacted):
         state["scratch_artifacts_removed"] += 1
         return SCRATCH_PLACEHOLDER
     return compacted
@@ -853,21 +849,8 @@ def compact_response_item(payload: dict, args: argparse.Namespace, state: dict[s
 
     if payload_type != "message":
         return
-
-    content = payload.get("content")
-    if not isinstance(content, list):
-        return
-    for entry in content:
-        if not isinstance(entry, dict):
-            continue
-        key = content_text_key(entry)
-        if key and isinstance(entry.get(key), str):
-            entry[key] = compact_content_text_with_policy(
-                entry[key],
-                state,
-                args,
-                role=payload.get("role"),
-            )
+    # Preserve user/assistant chat message content verbatim.
+    return
 
 
 def compact_event_msg(payload: dict, args: argparse.Namespace, state: dict[str, int]) -> None:
@@ -899,7 +882,7 @@ def compact_event_msg(payload: dict, args: argparse.Namespace, state: dict[str, 
                 payload[field] = AGENTS_PLACEHOLDER
                 state["duplicated_instruction_messages"] += 1
                 continue
-            if args.profile == "resume" and looks_scratch_artifact(value):
+            if looks_scratch_artifact(value):
                 payload[field] = SCRATCH_PLACEHOLDER
                 state["scratch_artifacts_removed"] += 1
 

@@ -90,8 +90,10 @@ tail -n 200 /path/to/rollout-*.jsonl.freeze | jq -r '.timestamp+" | "+.type'
 # 3) Error scan (avoid huge raw dumps)
 rg -n '"status":"failed"|"type":"error"|429|timeout|task_complete' /path/to/rollout-*.jsonl.freeze
 
-# 4) Compact from the frozen snapshot (resume path auto-scrubs artifacts now)
-python3 compact_codex_session.py --profile resume /path/to/rollout-*.jsonl.freeze
+# 4) Compact from the frozen snapshot (safe keeps chat content intact)
+python3 compact_codex_session.py --profile safe /path/to/rollout-*.jsonl.freeze
+# Optional aggressive path:
+# python3 compact_codex_session.py --profile resume /path/to/rollout-*.jsonl.freeze
 ```
 
 Session markers:
@@ -199,6 +201,8 @@ Notes:
 - keeps full turn structure
 - trims bulky fields only
 - removes historical AGENTS instruction blobs from `turn_context.user_instructions` and `compacted.payload.replacement_history` (placeholdered)
+- preserves `response_item.message` chat content verbatim
+- scrubs AGENTS/scratch contamination only in metadata/synthetic fields (`event_msg.*`, compacted payloads)
 - intended as the first real swap candidate
 
 `resume`:
@@ -206,8 +210,8 @@ Notes:
 - collapses older history into a checkpointed compacted span
 - keeps recent turns intact
 - emits per-run manifest data
-- auto-scrubs internal scratch/tool-transcript leaks from assistant history/checkpoint material
-- removes embedded historical AGENTS blobs (including copied AGENTS text nested inside historical messages)
+- skips contaminated assistant scratch/tool-transcript text while building synthetic checkpoint/replacement history
+- removes embedded historical AGENTS blobs in metadata/synthetic paths
 - intended for continuation on already-warm sessions
 
 Codex AGENTS handling:
