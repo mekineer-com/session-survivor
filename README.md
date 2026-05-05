@@ -78,6 +78,22 @@ python3 compact_gemini_session.py /path/to/gemini-session.json
 python3 compact_claude_session.py /path/to/claude.jsonl --warn-depth 8 --max-depth 12
 ```
 
+Safe forensics workflow (Codex stuck / context-rot investigation):
+
+```sh
+# 1) Freeze first (never analyze the live mutable file directly)
+cp /path/to/rollout-*.jsonl /path/to/rollout-*.jsonl.freeze
+
+# 2) Timeline only (small/structured, low contamination risk)
+tail -n 200 /path/to/rollout-*.jsonl.freeze | jq -r '.timestamp+" | "+.type'
+
+# 3) Error scan (avoid huge raw dumps)
+rg -n '"status":"failed"|"type":"error"|429|timeout|task_complete' /path/to/rollout-*.jsonl.freeze
+
+# 4) Compact from the frozen snapshot (resume path auto-scrubs artifacts now)
+python3 compact_codex_session.py --profile resume /path/to/rollout-*.jsonl.freeze
+```
+
 Session markers:
 
 - Codex: when `CODEX_THREAD_ID` is present, `compact_codex_session.py` appends a marker line to `~/.codex/session-survivor/thread-markers.jsonl`.
@@ -190,6 +206,8 @@ Notes:
 - collapses older history into a checkpointed compacted span
 - keeps recent turns intact
 - emits per-run manifest data
+- auto-scrubs internal scratch/tool-transcript leaks from assistant history/checkpoint material
+- removes embedded historical AGENTS blobs (including copied AGENTS text nested inside historical messages)
 - intended for continuation on already-warm sessions
 
 Codex AGENTS handling:

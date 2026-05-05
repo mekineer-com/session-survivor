@@ -29,6 +29,9 @@ AGENTS_PLACEHOLDER = (
     "[Compacted historical AGENTS instructions. "
     "Fresh AGENTS.md is loaded from disk on the next user turn.]"
 )
+SCRATCH_PLACEHOLDER = (
+    "[Compacted internal scratch/tool transcript removed for resume integrity.]"
+)
 PATCH_PLACEHOLDER = "[Compacted tool input"
 OUTPUT_PLACEHOLDER = "[Compacted tool output"
 REASONING_PLACEHOLDER = "[Compacted agent reasoning"
@@ -101,6 +104,18 @@ IGNORE_MESSAGE_HINTS = (
     "<subagent_notification>",
     "{\"agent_id\":",
     "\"status\":{\"completed\":",
+)
+HARD_SCRATCH_PATTERNS = (
+    re.compile(r"\bassistant to=(multi_tool_use\.parallel|functions\.[a-z_]+)\b", re.I),
+    re.compile(r"\"recipient_name\":\"functions\.[^\"]+\""),
+    re.compile(r"\"tool_uses\":\[\{\"recipient_name\":\"functions\.exec_command\""),
+)
+SOFT_SCRATCH_PATTERNS = (
+    re.compile(r"\bneed inspect\b", re.I),
+    re.compile(r"\bpotential bug:\b", re.I),
+    re.compile(r"\blet's search entire repo\b", re.I),
+    re.compile(r"\bupdate commentary first\b", re.I),
+    re.compile(r"\bwe need send updates every 20s\b", re.I),
 )
 SNIPPET_MAX_CHARS = 220
 
@@ -228,7 +243,7 @@ def shorten(text: str, max_chars: int, label: str) -> tuple[str, bool]:
 
 
 def compact_content_text(text: str, state: dict[str, int]) -> str:
-    if is_agents_instruction_blob(text):
+    if has_embedded_agents_blob(text):
         state["duplicated_instruction_messages"] += 1
         return AGENTS_PLACEHOLDER
     return text
@@ -239,6 +254,47 @@ def is_agents_instruction_blob(text: str) -> bool:
         text.startswith("# AGENTS.md")
         and ("\n## " in text or "\n<INSTRUCTIONS>\n" in text)
     )
+
+
+def has_embedded_agents_blob(text: str) -> bool:
+    if is_agents_instruction_blob(text):
+        return True
+    if len(text) < 600:
+        return False
+    if AGENTS_PREFIX in text and "<INSTRUCTIONS>" in text:
+        return True
+    if "# AGENTS.md" in text and "<INSTRUCTIONS>" in text:
+        return True
+    if "You are Codex, a coding agent based on GPT-5" in text and "# Personality" in text:
+        return True
+    return False
+
+
+def looks_scratch_artifact(text: str) -> bool:
+    if len(text) < 120:
+        return False
+    if any(pattern.search(text) for pattern in HARD_SCRATCH_PATTERNS):
+        return True
+    hits = sum(1 for pattern in SOFT_SCRATCH_PATTERNS if pattern.search(text))
+    return hits >= 2
+
+
+def compact_content_text_with_policy(
+    text: str,
+    state: dict[str, int],
+    args: argparse.Namespace,
+    *,
+    role: str | None = None,
+) -> str:
+    compacted = compact_content_text(text, state)
+    if (
+        args.profile == "resume"
+        and role == "assistant"
+        and looks_scratch_artifact(compacted)
+    ):
+        state["scratch_artifacts_removed"] += 1
+        return SCRATCH_PLACEHOLDER
+    return compacted
 
 
 def default_context_files() -> list[pathlib.Path]:
@@ -444,7 +500,30 @@ def core_format_warnings(records: list[dict]) -> list[str]:
     return warnings
 
 
-def selected_replacement_history(old_turns: list[list[dict]], context_terms: set[str], max_records: int) -> tuple[list[dict], list[str]]:
+def should_skip_message_payload(
+    payload: dict,
+    args: argparse.Namespace,
+    state: dict[str, int],
+) -> bool:
+    text = message_text_from_payload(payload)
+    if not text:
+        return False
+    if has_embedded_agents_blob(text):
+        state["duplicated_instruction_messages"] += 1
+        return True
+    if args.profile == "resume" and payload.get("role") == "assistant" and looks_scratch_artifact(text):
+        state["scratch_artifacts_removed"] += 1
+        return True
+    return False
+
+
+def selected_replacement_history(
+    old_turns: list[list[dict]],
+    context_terms: set[str],
+    max_records: int,
+    args: argparse.Namespace,
+    state: dict[str, int],
+) -> tuple[list[dict], list[str]]:
     scored: list[tuple[int, int, int, dict, set[str]]] = []
     total_turns = max(len(old_turns), 1)
     for turn_idx, turn in enumerate(old_turns):
@@ -459,6 +538,8 @@ def selected_replacement_history(old_turns: list[list[dict]], context_terms: set
             if payload.get("type") != "message":
                 continue
             role = payload.get("role")
+            if should_skip_message_payload(payload, args, state):
+                continue
             score, overlap = score_message_payload(payload, context_terms)
             if role == "user" and first_user is None:
                 first_user = copy.deepcopy(payload)
@@ -500,7 +581,13 @@ def selected_replacement_history(old_turns: list[list[dict]], context_terms: set
     return chosen, topics
 
 
-def extract_checkpoint(old_turns: list[list[dict]], context_terms: set[str], topics: list[str]) -> dict[str, object]:
+def extract_checkpoint(
+    old_turns: list[list[dict]],
+    context_terms: set[str],
+    topics: list[str],
+    args: argparse.Namespace,
+    state: dict[str, int],
+) -> dict[str, object]:
     checkpoint: dict[str, object] = {
         "kind": "rollout_checkpoint",
         "topics": topics,
@@ -539,6 +626,8 @@ def extract_checkpoint(old_turns: list[list[dict]], context_terms: set[str], top
 
             if payload_type == "message":
                 text = message_text_from_payload(payload)
+                if should_skip_message_payload(payload, args, state):
+                    continue
                 if should_ignore_message(text):
                     continue
                 snippet = short_snippet(text)
@@ -629,7 +718,13 @@ def synthetic_compacted_turn(
     source_sha256: str,
     original_line_count: int,
 ) -> list[dict]:
-    replacement_history, topics = selected_replacement_history(old_turns, context_terms, args.max_replacement_records)
+    replacement_history, topics = selected_replacement_history(
+        old_turns,
+        context_terms,
+        args.max_replacement_records,
+        args,
+        state,
+    )
     last_obj = old_turns[-1][-1]
     timestamp = str(last_obj.get("timestamp") or "")
     old_record_count = sum(len(turn) for turn in old_turns)
@@ -645,7 +740,7 @@ def synthetic_compacted_turn(
     if topics:
         summary += f" Topics: {', '.join(topics)}."
     summary += " Current project truth should come from HANDOFF.md and the repo."
-    checkpoint = extract_checkpoint(old_turns, context_terms, topics)
+    checkpoint = extract_checkpoint(old_turns, context_terms, topics, args, state)
     parent_provenance = extract_checkpoint_provenance(source)
     parent_chain_depth = 0
     if parent_provenance:
@@ -767,7 +862,12 @@ def compact_response_item(payload: dict, args: argparse.Namespace, state: dict[s
             continue
         key = content_text_key(entry)
         if key and isinstance(entry.get(key), str):
-            entry[key] = compact_content_text(entry[key], state)
+            entry[key] = compact_content_text_with_policy(
+                entry[key],
+                state,
+                args,
+                role=payload.get("role"),
+            )
 
 
 def compact_event_msg(payload: dict, args: argparse.Namespace, state: dict[str, int]) -> None:
@@ -788,12 +888,31 @@ def compact_event_msg(payload: dict, args: argparse.Namespace, state: dict[str, 
             payload["text"] = text
             if changed:
                 state["agent_reasoning_truncated"] += 1
+    event_type = str(payload.get("type") or "")
+    if event_type in {"agent_message", "task_complete", "user_message"}:
+        message_fields = ["message"] if event_type != "task_complete" else ["last_agent_message"]
+        for field in message_fields:
+            value = payload.get(field)
+            if not isinstance(value, str):
+                continue
+            if has_embedded_agents_blob(value):
+                payload[field] = AGENTS_PLACEHOLDER
+                state["duplicated_instruction_messages"] += 1
+                continue
+            if args.profile == "resume" and looks_scratch_artifact(value):
+                payload[field] = SCRATCH_PLACEHOLDER
+                state["scratch_artifacts_removed"] += 1
 
 
 def compact_turn_context(payload: dict, args: argparse.Namespace, state: dict[str, int]) -> None:
     user_instructions = payload.get("user_instructions")
     if isinstance(user_instructions, str):
-        payload["user_instructions"] = compact_content_text(user_instructions, state)
+        payload["user_instructions"] = compact_content_text_with_policy(
+            user_instructions,
+            state,
+            args,
+            role="user",
+        )
     summary = payload.get("summary")
     if isinstance(summary, str):
         summary, _ = shorten(summary, args.max_reasoning_chars, REASONING_PLACEHOLDER)
@@ -826,7 +945,12 @@ def compact_compacted_payload(payload: dict, args: argparse.Namespace, state: di
                 continue
             key = content_text_key(entry)
             if key and isinstance(entry.get(key), str):
-                entry[key] = compact_content_text(entry[key], state)
+                entry[key] = compact_content_text_with_policy(
+                    entry[key],
+                    state,
+                    args,
+                    role=str(rec.get("role") or ""),
+                )
                 entry[key], _ = shorten(entry[key], args.max_reasoning_chars, REASONING_PLACEHOLDER)
 
 
@@ -973,6 +1097,7 @@ def main() -> int:
         "semantic_replacement_records": 0,
         "checkpoint_sections_emitted": 0,
         "model_fields_normalized": 0,
+        "scratch_artifacts_removed": 0,
     }
 
     records = [json.loads(line) for line in original_bytes.splitlines()]
