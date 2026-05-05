@@ -18,7 +18,7 @@ Current support:
   - `--show-summary`
   - `--show-lineage`
 - Codex JSONL
-  - `chat-resume-boundary-safe`
+  - `chat-resume-hybrid-safe-tail`
   - `--show-summary`
   - `--show-lineage`
 - Gemini JSON
@@ -50,7 +50,7 @@ The goal is to reduce that bulk while preserving what matters for continuation:
 
 ## Quick start
 
-Codex `safe` + `resume` + `chat-resume-boundary-safe` from the latest session:
+Codex `safe` + `resume` + `chat-resume-hybrid-safe-tail` from the latest session:
 
 ```sh
 ./reproduce_codex_session_profiles.sh --latest
@@ -118,7 +118,7 @@ Session markers:
   - main Codex compactor
   - supports `safe`, `resume`, and `--show-lineage`
 - `chat_codex_session.py`
-  - Codex chat extractor for resume: user+assistant chat + native turn boundaries + latest compacted anchor
+  - Codex hybrid chat extractor for resume: chat-only old history + native safe tail
   - supports `--latest`, `--show-summary`, and `--show-lineage`
 - `compact_claude_session.py`
   - conservative Claude compactor
@@ -139,7 +139,7 @@ Session markers:
 - `lineage.py`
   - provenance and parent/child session lineage helpers
 - `reproduce_codex_session_profiles.sh`
-  - runs `safe`, then `resume` from the same frozen snapshot, plus `chat-resume-boundary-safe` from source
+  - runs `safe`, then `resume` from the same frozen snapshot, plus `chat-resume-hybrid-safe-tail` from source
 - `reproduce_claude_safe.sh`
   - runs Claude `safe` against the latest JSONL in the active Claude project folder
 
@@ -222,20 +222,23 @@ Notes:
 - removes embedded historical AGENTS blobs in metadata/synthetic paths
 - intended for continuation on already-warm sessions
 
-`chat-resume-boundary-safe` (`chat_codex_session.py`):
+`chat-resume-hybrid-safe-tail` (`chat_codex_session.py`):
 
 - purpose:
   - keep all user/assistant conversation text from Codex rollout JSONL
-  - preserve minimal temporal anchors needed for resume parsing
+  - keep old history lightweight while preserving a fully native recent tail for resume continuity
 - kept records:
   - native header rows before first turn (for example `session_meta`)
-  - `event_msg` turn boundaries: `task_started`, `task_complete`
-  - latest native `type="compacted"` record (anchor)
-  - `response_item` where `payload.type=message` and `payload.role` is `user` or `assistant`
-  - emitted as native `response_item` rows (not custom row types)
+  - chat-compacted old turns:
+    - latest native `type="compacted"` record (anchor)
+    - `response_item` where `payload.type=message` and `payload.role` is `user` or `assistant`
+    - historical turn-boundary events are intentionally dropped to avoid replaying old interruption banners
+  - native safe tail window (full original records per turn: `event_msg`, `response_item`, `turn_context`, `compacted`)
+  - default tail size: last `12` turns (`--safe-tail-turns`)
 - usage:
   - `python3 chat_codex_session.py --latest --show-summary`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl`
+  - `python3 chat_codex_session.py /path/to/rollout.jsonl --safe-tail-turns 8`
 
 Codex AGENTS handling:
 

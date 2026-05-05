@@ -13,15 +13,15 @@ from lineage import build_compaction_manifest, describe_lineage
 
 
 SESSION_ROOT = pathlib.Path.home() / ".codex" / "sessions"
-DEFAULT_OUTPUT_ROOT = pathlib.Path("/home/marcos/apps-codex/session-survivor/outputs/codex-chat-resume-boundary-safe")
+DEFAULT_OUTPUT_ROOT = pathlib.Path("/home/marcos/apps-codex/session-survivor/outputs/codex-chat-resume-hybrid-safe-tail")
 PLACEHOLDER = "[Compacted Codex chat message"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Create a Codex chat-resume copy: keep user/assistant text, "
-            "turn boundaries, and the latest compacted anchor."
+            "Create a Codex hybrid chat-resume copy: keep conversation text "
+            "for old turns and preserve a native safe tail for continuity."
         )
     )
     parser.add_argument("session", nargs="?", help="Path to a Codex rollout JSONL file.")
@@ -40,6 +40,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=4000,
         help="Keep at most this many chars per chat message.",
+    )
+    parser.add_argument(
+        "--safe-tail-turns",
+        type=int,
+        default=12,
+        help="Keep this many most recent turns in full native Codex schema.",
     )
     parser.add_argument(
         "--show-summary",
@@ -167,6 +173,28 @@ def turn_boundary_type(obj: dict[str, Any]) -> str:
     return ""
 
 
+def split_session_objects(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[list[dict[str, Any]]]]:
+    """Split records into pre-turn header rows and turn groups keyed by task_started."""
+    header: list[dict[str, Any]] = []
+    turns: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] | None = None
+
+    for obj in records:
+        if turn_boundary_type(obj) == "task_started":
+            if current is not None:
+                turns.append(current)
+            current = [obj]
+            continue
+        if current is None:
+            header.append(obj)
+        else:
+            current.append(obj)
+
+    if current is not None:
+        turns.append(current)
+    return header, turns
+
+
 def compact_chat_records(
     records: list[dict[str, Any]],
     args: argparse.Namespace,
@@ -174,27 +202,17 @@ def compact_chat_records(
 ) -> list[dict[str, Any]]:
     compacted: list[dict[str, Any]] = []
     last_compacted_index: int | None = None
-    open_start_rows: list[int] = []
 
     for idx, obj in enumerate(records):
         if obj.get("type") == "compacted":
             last_compacted_index = idx
 
     for idx, obj in enumerate(records):
-        # Preserve turn boundaries (timestamps that mark when turns happened),
-        # while ensuring unresolved starts do not accumulate.
+        # Old history is chat-only by design: drop boundary events so historical
+        # turn_aborted markers do not spam resume UI with interruption banners.
         boundary = turn_boundary_type(obj)
         if boundary:
-            if boundary == "task_started":
-                compacted.append(obj)
-                open_start_rows.append(len(compacted) - 1)
-                state["kept_turn_boundaries"] += 1
-            elif open_start_rows:
-                compacted.append(obj)
-                open_start_rows.pop()
-                state["kept_turn_boundaries"] += 1
-            else:
-                state["dropped_unmatched_boundary"] += 1
+            state["dropped_unmatched_boundary"] += 1
             continue
 
         # Keep only the most recent compacted record, but keep timeline order.
@@ -260,12 +278,6 @@ def compact_chat_records(
         )
         state["kept_chat_records"] += 1
 
-    if open_start_rows:
-        drop = set(open_start_rows)
-        compacted = [row for idx, row in enumerate(compacted) if idx not in drop]
-        state["dropped_unmatched_task_started"] += len(open_start_rows)
-        state["kept_turn_boundaries"] -= len(open_start_rows)
-
     return compacted
 
 
@@ -273,6 +285,8 @@ def main() -> int:
     args = parse_args()
     if args.max_message_chars < 80:
         raise SystemExit("max-message-chars must be >= 80.")
+    if args.safe_tail_turns < 1:
+        raise SystemExit("safe-tail-turns must be >= 1.")
 
     if args.latest:
         source = latest_session(SESSION_ROOT)
@@ -311,6 +325,9 @@ def main() -> int:
         "kept_header_records": 0,
         "kept_turn_boundaries": 0,
         "kept_compacted_anchor": 0,
+        "kept_safe_tail_turns": 0,
+        "kept_safe_tail_records": 0,
+        "chat_compacted_old_turns": 0,
         "dropped_non_response_item": 0,
         "dropped_non_message": 0,
         "dropped_non_chat_role": 0,
@@ -323,30 +340,41 @@ def main() -> int:
         "synthetic_timestamp_assigned": 0,
     }
 
-    # Preserve native header records (session_meta etc.) — required for Codex CLI resume.
-    header_rows: list[dict[str, Any]] = []
-    header_end = len(records)
-    for idx, obj in enumerate(records):
-        if obj.get("type") == "event_msg" and obj.get("payload", {}).get("type") == "task_started":
-            header_end = idx
-            break
-        header_rows.append(obj)
+    header_rows, turns = split_session_objects(records)
     state["kept_header_records"] = len(header_rows)
 
-    chat_rows = compact_chat_records(records[header_end:], args, state)
-    if not chat_rows:
-        raise SystemExit("No chat records survived filtering; refusing to write empty output file.")
+    safe_tail_turns = min(args.safe_tail_turns, len(turns))
+    old_turns = turns[:-safe_tail_turns] if safe_tail_turns else []
+    tail_turns = turns[-safe_tail_turns:] if safe_tail_turns else []
+    state["chat_compacted_old_turns"] = len(old_turns)
+    state["kept_safe_tail_turns"] = len(tail_turns)
+
+    old_rows = [obj for turn in old_turns for obj in turn]
+    chat_rows = compact_chat_records(old_rows, args, state) if old_rows else []
+    safe_tail_rows = [obj for turn in tail_turns for obj in turn]
+    state["kept_safe_tail_records"] = len(safe_tail_rows)
+
+    if not header_rows and not chat_rows and not safe_tail_rows:
+        raise SystemExit("No records survived filtering; refusing to write empty output file.")
 
     with compacted_copy.open("w", encoding="utf-8") as dst:
         for row in header_rows:
             dst.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
         for row in chat_rows:
             dst.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+        for row in safe_tail_rows:
+            dst.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
 
     compacted_validation = validate_jsonl(compacted_copy)
     compacted_bytes = compacted_copy.read_bytes()
     compacted_sha256 = sha256_bytes(compacted_bytes)
-    generated_at = chat_rows[-1].get("timestamp")
+    generated_at = None
+    if safe_tail_rows:
+        generated_at = safe_tail_rows[-1].get("timestamp")
+    elif chat_rows:
+        generated_at = chat_rows[-1].get("timestamp")
+    elif header_rows:
+        generated_at = header_rows[-1].get("timestamp")
 
     report = {
         "source": str(source),
@@ -363,12 +391,17 @@ def main() -> int:
         "changes": state,
         "warnings": [],
         "policy": {
-            "profile": "codex-chat-resume-boundary-safe",
+            "profile": "codex-chat-resume-hybrid-safe-tail",
             "max_message_chars": args.max_message_chars,
+            "safe_tail_turns": args.safe_tail_turns,
             "kept_roles": ["user", "assistant"],
             "kept_boundary_events": ["task_started", "task_complete", "turn_aborted"],
-            "kept_compacted_anchor": "latest_only",
-            "output_record_types": ["session_meta/header", "response_item.message", "event_msg.task_*", "compacted(latest)"],
+            "kept_compacted_anchor": "latest_only_for_compacted_history",
+            "output_record_types": [
+                "session_meta/header",
+                "chat-compacted-history(response_item.message + compacted(latest))",
+                "safe-tail(native turn records)",
+            ],
         },
     }
 
@@ -379,7 +412,7 @@ def main() -> int:
         report_path=report_path,
         source_sha256=original_sha256,
         compacted_sha256=compacted_sha256,
-        profile="codex-chat-resume-boundary-safe",
+        profile="codex-chat-resume-hybrid-safe-tail",
         generated_at=generated_at,
         original_lines=original_validation["line_count"],
         compacted_lines=compacted_validation["line_count"],
@@ -389,9 +422,10 @@ def main() -> int:
     )
     manifest.setdefault("policy", {})
     manifest["policy"]["max_message_chars"] = args.max_message_chars
+    manifest["policy"]["safe_tail_turns"] = args.safe_tail_turns
     manifest["policy"]["kept_roles"] = ["user", "assistant"]
     manifest["policy"]["kept_boundary_events"] = ["task_started", "task_complete", "turn_aborted"]
-    manifest["policy"]["kept_compacted_anchor"] = "latest_only"
+    manifest["policy"]["kept_compacted_anchor"] = "latest_only_for_compacted_history"
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
