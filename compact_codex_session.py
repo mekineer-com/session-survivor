@@ -129,7 +129,7 @@ def parse_args() -> argparse.Namespace:
         "--profile",
         choices=("safe", "resume"),
         default="safe",
-        help="Compaction profile. 'safe' keeps full turn structure and only trims bulky fields. 'resume' emits checkpointed compacted spans.",
+        help="Compaction profile. 'safe' keeps full turn structure and compacts non-chat payloads. 'resume' emits checkpointed compacted spans.",
     )
     parser.add_argument(
         "--latest",
@@ -140,12 +140,6 @@ def parse_args() -> argparse.Namespace:
         "--output-root",
         default=str(DEFAULT_OUTPUT_ROOT),
         help="Root directory for original/compacted/report outputs.",
-    )
-    parser.add_argument(
-        "--max-tool-output-chars",
-        type=int,
-        default=400,
-        help="Keep at most this many chars of tool output payloads.",
     )
     parser.add_argument(
         "--max-tool-input-chars",
@@ -240,6 +234,10 @@ def shorten(text: str, max_chars: int, label: str) -> tuple[str, bool]:
     kept = text[:max_chars].rstrip()
     compacted = f"{kept}\n... {label}; original length={len(text)} chars]"
     return compacted, True
+
+
+def remove_text(text: str, label: str) -> str:
+    return f"{label} removed; original length={len(text)} chars]"
 
 
 def compact_content_text(text: str, state: dict[str, int]) -> str:
@@ -823,10 +821,8 @@ def compact_response_item(payload: dict, args: argparse.Namespace, state: dict[s
     if payload_type in ("function_call_output", "custom_tool_call_output"):
         output = payload.get("output")
         if isinstance(output, str):
-            output, changed = shorten(output, args.max_tool_output_chars, OUTPUT_PLACEHOLDER)
-            payload["output"] = output
-            if changed:
-                state["tool_outputs_truncated"] += 1
+            payload["output"] = remove_text(output, OUTPUT_PLACEHOLDER)
+            state["tool_outputs_truncated"] += 1
         return
 
     if payload_type == "custom_tool_call":
@@ -871,6 +867,12 @@ def compact_event_msg(payload: dict, args: argparse.Namespace, state: dict[str, 
             payload["text"] = text
             if changed:
                 state["agent_reasoning_truncated"] += 1
+    if payload.get("type") == "exec_command_end":
+        for field in ("aggregated_output", "stdout", "stderr", "formatted_output"):
+            value = payload.get(field)
+            if isinstance(value, str) and value:
+                payload[field] = remove_text(value, OUTPUT_PLACEHOLDER)
+                state["tool_outputs_truncated"] += 1
     event_type = str(payload.get("type") or "")
     if event_type in {"agent_message", "task_complete", "user_message"}:
         message_fields = ["message"] if event_type != "task_complete" else ["last_agent_message"]
@@ -1168,7 +1170,6 @@ def main() -> int:
             "emit_compacted_spans": args.emit_compacted_spans,
             "keep_last_turns": args.keep_last_turns,
             "max_replacement_records": args.max_replacement_records,
-            "max_tool_output_chars": args.max_tool_output_chars,
             "max_tool_input_chars": args.max_tool_input_chars,
             "max_reasoning_chars": args.max_reasoning_chars,
             "duplicate_instruction_placeholder": AGENTS_PLACEHOLDER,

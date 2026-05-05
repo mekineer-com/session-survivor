@@ -199,7 +199,7 @@ Notes:
 `safe`:
 
 - keeps full turn structure
-- trims bulky fields only
+- removes all tool-output text payloads (keeps only compact placeholders)
 - removes historical AGENTS instruction blobs from `turn_context.user_instructions` and `compacted.payload.replacement_history` (placeholdered)
 - preserves `response_item.message` chat content verbatim
 - scrubs AGENTS/scratch contamination only in metadata/synthetic fields (`event_msg.*`, compacted payloads)
