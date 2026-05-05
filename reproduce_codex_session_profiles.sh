@@ -3,6 +3,7 @@ set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 TOOL="$ROOT/compact_codex_session.py"
+CHAT_TOOL="$ROOT/chat_codex_session.py"
 SESSION_ROOT="/home/marcos/.codex/sessions"
 STAMP="$(date +%Y%m%dT%H%M%S)"
 OUTROOT="$ROOT/outputs/repro/$STAMP"
@@ -33,7 +34,11 @@ SAFE_SNAPSHOT="$(jq -r '.original_copy' "$SAFE_REPORT")"
 python3 "$TOOL" --profile resume "$SAFE_SNAPSHOT" --output-root "$OUTROOT/resume" > "$OUTROOT/resume-run.json"
 RESUME_REPORT="$(find "$OUTROOT/resume/reports" -type f -name '*.json' | head -n 1)"
 
+python3 "$CHAT_TOOL" "$SOURCE" --output-root "$OUTROOT/chat-plus-window" --show-summary > "$OUTROOT/chat-plus-window-run.json"
+CHAT_REPORT="$(find "$OUTROOT/chat-plus-window/reports" -type f -name '*.json' | head -n 1)"
+
 printf 'source=%s\n' "$SOURCE"
 printf 'outroot=%s\n' "$OUTROOT"
 printf 'safe_report=%s\n' "$SAFE_REPORT"
 printf 'resume_report=%s\n' "$RESUME_REPORT"
+printf 'chat_plus_window_report=%s\n' "$CHAT_REPORT"

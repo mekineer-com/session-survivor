@@ -17,6 +17,10 @@ Current support:
   - `chat-resume`
   - `--show-summary`
   - `--show-lineage`
+- Codex JSONL
+  - `chat-plus-window`
+  - `--show-summary`
+  - `--show-lineage`
 - Gemini JSON
   - `safe`
   - `--show-summary`
@@ -46,7 +50,7 @@ The goal is to reduce that bulk while preserving what matters for continuation:
 
 ## Quick start
 
-Codex `safe` + `resume` from the latest session:
+Codex `safe` + `resume` + `chat-plus-window` from the latest session:
 
 ```sh
 ./reproduce_codex_session_profiles.sh --latest
@@ -70,6 +74,7 @@ Run one-off compaction directly:
 ```sh
 python3 compact_codex_session.py --profile safe /path/to/codex.jsonl
 python3 compact_codex_session.py --profile resume /path/to/codex.jsonl
+python3 chat_codex_session.py --latest --show-summary
 python3 compact_claude_session.py /path/to/claude.jsonl
 python3 chat_claude_session.py /path/to/claude.jsonl
 python3 compact_gemini_session.py /path/to/gemini-session.json
@@ -112,6 +117,9 @@ Session markers:
 - `compact_codex_session.py`
   - main Codex compactor
   - supports `safe`, `resume`, and `--show-lineage`
+- `chat_codex_session.py`
+  - Codex continuity extractor: full user+assistant chat + safe-compacted sidecar window
+  - supports `--latest`, `--show-summary`, and `--show-lineage`
 - `compact_claude_session.py`
   - conservative Claude compactor
   - currently `safe` only, plus `--show-summary` and `--show-lineage`
@@ -131,7 +139,7 @@ Session markers:
 - `lineage.py`
   - provenance and parent/child session lineage helpers
 - `reproduce_codex_session_profiles.sh`
-  - runs `safe` first, then `resume` from the same frozen snapshot
+  - runs `safe`, then `resume` from the same frozen snapshot, plus `chat-plus-window` from source
 - `reproduce_claude_safe.sh`
   - runs Claude `safe` against the latest JSONL in the active Claude project folder
 
@@ -213,6 +221,23 @@ Notes:
 - skips contaminated assistant scratch/tool-transcript text while building synthetic checkpoint/replacement history
 - removes embedded historical AGENTS blobs in metadata/synthetic paths
 - intended for continuation on already-warm sessions
+
+`chat-plus-window` (`chat_codex_session.py`):
+
+- purpose:
+  - keep all user/assistant conversation text from Codex rollout JSONL
+  - add a safe-compacted continuity sidecar from the latest pre-compaction window
+- kept records:
+  - `response_item` where `payload.type=message` and `payload.role` is `user` or `assistant`
+  - output row shape: `{"type":"chat_message","timestamp","role","phase","text"}`
+  - continuity row shape: `{"type":"continuity_record","timestamp","source_window_index","record"}`
+- continuity window rule:
+  - between the last two native `type="compacted"` markers
+  - fallback: after the last marker if only one exists
+  - warning is emitted in report when fallback is used
+- usage:
+  - `python3 chat_codex_session.py --latest --show-summary`
+  - `python3 chat_codex_session.py /path/to/rollout.jsonl`
 
 Codex AGENTS handling:
 
