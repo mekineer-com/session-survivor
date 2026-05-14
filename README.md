@@ -255,6 +255,15 @@ Runtime note:
 - treat the jump as directional, not literal proof of a larger true context window
 - the real check is factual continuity after the jump
 
+`gpt-5.3-codex` stability note:
+
+- if Codex starts feeling unstable (random stops, noisy startup warnings, tool-suggestion 403 spam), disable marketplace/discovery paths in `~/.codex/config.toml`:
+  - `tool_suggest = false`
+  - `tool_search = false`
+  - `plugins = false`
+- this has repeatedly reduced noise and improved session stability in practice
+- this is an operational workaround, not a proven root-cause fix; one plausible cause is newer Codex CLI behavior being less favorable to `gpt-5.3-codex`
+
 ### Claude
 
 Current `safe` trimming targets:
