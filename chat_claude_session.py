@@ -23,6 +23,7 @@ COMMAND_WRAPPER_RE = re.compile(
     r"<command-args>.*?</command-args>\s*$",
     re.DOTALL,
 )
+CONTINUATION_SUMMARY_PREFIX = "This session is being continued from a previous conversation that ran out of context."
 
 
 def parse_args() -> argparse.Namespace:
@@ -174,6 +175,13 @@ def is_meta_noise(text: str) -> bool:
     return False
 
 
+def is_continuation_summary(text: str) -> bool:
+    normalized = text.strip()
+    if not normalized.startswith(CONTINUATION_SUMMARY_PREFIX):
+        return False
+    return "\n\nSummary:" in normalized
+
+
 def stable_uuid(source: pathlib.Path, line_no: int) -> str:
     namespace = uuid.uuid5(uuid.NAMESPACE_URL, str(source))
     return str(uuid.uuid5(namespace, f"line-{line_no}"))
@@ -283,6 +291,8 @@ def compact_chat_records(
             state["dropped_meta_noise"] += 1
             continue
 
+        compact_summary = bool(obj.get("isCompactSummary")) or is_continuation_summary(text)
+
         text, changed = shorten(text, args.max_message_chars)
         if changed:
             state["messages_truncated"] += 1
@@ -311,6 +321,9 @@ def compact_chat_records(
                 "content": resume_content,
             },
         }
+        if compact_summary:
+            row["isCompactSummary"] = True
+            row["isVisibleInTranscriptOnly"] = True
         row.update(chat_envelope_fields(obj, session_defaults))
         # Rewrite parentUuid to point to previous kept record, not removed intermediates.
         if last_kept_uuid is not None:
