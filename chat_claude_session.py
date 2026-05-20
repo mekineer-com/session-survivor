@@ -325,8 +325,11 @@ def compact_chat_records(
             row["isCompactSummary"] = True
             row["isVisibleInTranscriptOnly"] = True
         row.update(chat_envelope_fields(obj, session_defaults))
-        # Rewrite parentUuid to point to previous kept record, not removed intermediates.
-        if last_kept_uuid is not None:
+        # Keep compact-summary rows as hard resume anchors: no parent chain.
+        if compact_summary:
+            row.pop("parentUuid", None)
+        # Rewrite normal chat parentUuid to previous kept record, not removed intermediates.
+        elif last_kept_uuid is not None:
             row["parentUuid"] = last_kept_uuid
         else:
             row.pop("parentUuid", None)
