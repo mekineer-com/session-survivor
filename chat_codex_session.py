@@ -221,11 +221,15 @@ def compact_chat_records(
             last_compacted_index = idx
 
     for idx, obj in enumerate(records):
-        # Old history is chat-only by design: drop boundary events so historical
-        # turn_aborted markers do not spam resume UI with interruption banners.
         boundary = turn_boundary_type(obj)
-        if boundary:
+        if boundary == "turn_aborted":
             state["dropped_old_boundary_events"] += 1
+            continue
+        if boundary in {"task_started", "task_complete"}:
+            # Preserve turn boundaries so resume can retain chronological
+            # structure in older compacted history.
+            compacted.append(obj)
+            state["kept_old_boundary_events"] += 1
             continue
 
         # Keep only the most recent compacted record, but keep timeline order.
@@ -343,6 +347,7 @@ def main() -> int:
         "kept_chat_records": 0,
         "kept_header_records": 0,
         "kept_compacted_anchor": 0,
+        "kept_old_boundary_events": 0,
         "kept_safe_tail_turns": 0,
         "kept_safe_tail_records": 0,
         "chat_compacted_old_turns": 0,
@@ -446,7 +451,8 @@ def main() -> int:
             "max_reasoning_chars": args.max_reasoning_chars,
             "kept_roles": ["user", "assistant"],
             "kept_compacted_anchor": "latest_only_for_compacted_history",
-            "chat_history_dropped_event_types": ["task_started", "task_complete", "turn_aborted"],
+            "chat_history_kept_boundary_event_types": ["task_started", "task_complete"],
+            "chat_history_dropped_event_types": ["turn_aborted"],
             "safe_tail_kept_record_types": ["event_msg", "response_item", "turn_context", "compacted"],
             "output_record_types": [
                 "session_meta/header",
