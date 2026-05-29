@@ -19,6 +19,7 @@ Current support:
   - `--show-lineage`
 - Codex JSONL
   - `chat-resume-hybrid-safe-tail`
+  - `chat-v2-inline-continuity`
   - `--show-summary`
   - `--show-lineage`
 - Gemini JSON
@@ -74,6 +75,7 @@ Run one-off compaction directly:
 python3 compact_codex_session.py --profile safe /path/to/codex.jsonl
 python3 compact_codex_session.py --profile resume /path/to/codex.jsonl
 python3 chat_codex_session.py --latest --show-summary
+python3 chat_codex_v2.py --latest --show-summary
 python3 compact_claude_session.py /path/to/claude.jsonl
 python3 chat_claude_session.py /path/to/claude.jsonl
 python3 compact_gemini_session.py /path/to/gemini-session.json
@@ -119,6 +121,12 @@ Session markers:
 - `chat_codex_session.py`
   - Codex hybrid chat extractor for resume: chat-only old history + native safe tail
   - safe tail rows are compacted with Codex `safe` rules (tool/output trimming, reasoning cleanup)
+  - supports `--latest`, `--show-summary`, and `--show-lineage`
+- `chat_codex_v2.py`
+  - Codex in-place continuity rewrite for long sessions
+  - preserves JSONL row order and record types; rewrites only old `user`/`assistant` message text
+  - keeps newest `--safe-tail-turns` turns fully unchanged
+  - targets older history to `--target-ratio` while preserving high-signal paragraphs
   - supports `--latest`, `--show-summary`, and `--show-lineage`
 - `compact_claude_session.py`
   - conservative Claude compactor
@@ -237,6 +245,16 @@ Use this order:
   - `python3 chat_codex_session.py --latest --show-summary`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl --safe-tail-turns 8`
+
+`chat-v2-inline-continuity` (`chat_codex_v2.py`):
+
+- designed for continuity snapshots that stay inside the same session file structure
+- rewrites old-message text in place, keeping chronological/event scaffolding unchanged
+- preserves row count and record types (`response_item`, `event_msg`, `turn_context`, `compacted`, etc.)
+- usage:
+  - `python3 chat_codex_v2.py --latest --show-summary`
+  - `python3 chat_codex_v2.py /path/to/rollout.jsonl --target-ratio 0.20`
+  - `python3 chat_codex_v2.py /path/to/rollout.jsonl --safe-tail-turns 1 --min-summary-chars 220 --max-summary-chars 1600`
 
 Codex guardrails in `compact_codex_session.py`:
 
