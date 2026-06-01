@@ -22,6 +22,7 @@ class ChatRow:
     role: str
     turn_id: int
     exchange_id: int
+    phase: str
     text: str
 
 
@@ -85,6 +86,15 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Export mode: 'collapsed' keeps logical user->final-assistant exchanges "
             "(default), 'raw' keeps every user/assistant message row."
+        ),
+    )
+    parser.add_argument(
+        "--assistant-selection",
+        choices=("phase_only", "phase_then_heuristic"),
+        default="phase_then_heuristic",
+        help=(
+            "When mode=collapsed: 'phase_only' keeps only assistant rows with phase=final_answer; "
+            "'phase_then_heuristic' falls back to chatter filtering when no final_answer exists."
         ),
     )
     return parser.parse_args()
@@ -160,7 +170,8 @@ def collect_rows(source: pathlib.Path) -> list[ChatRow]:
             text = extract_text(payload.get("content"))
             if not text:
                 continue
-            rows.append(ChatRow(ts=ts, role=role, turn_id=turn_id, exchange_id=0, text=text))
+            phase = str(payload.get("phase") or "")
+            rows.append(ChatRow(ts=ts, role=role, turn_id=turn_id, exchange_id=0, phase=phase, text=text))
     rows.sort(key=lambda r: r.ts)
     assign_exchange_ids(rows)
     return rows
@@ -176,7 +187,7 @@ def assign_exchange_ids(rows: list[ChatRow]) -> None:
         row.exchange_id = exchange_id
 
 
-def collapse_rows(rows: list[ChatRow]) -> tuple[list[ChatRow], dict[str, int]]:
+def collapse_rows(rows: list[ChatRow], assistant_selection: str) -> tuple[list[ChatRow], dict[str, int]]:
     by_exchange: dict[int, list[ChatRow]] = {}
     for row in rows:
         by_exchange.setdefault(row.exchange_id, []).append(row)
@@ -184,6 +195,8 @@ def collapse_rows(rows: list[ChatRow]) -> tuple[list[ChatRow], dict[str, int]]:
     collapsed: list[ChatRow] = []
     assistant_rows_dropped = 0
     progress_only_rows_dropped = 0
+    exchanges_without_final_answer = 0
+    phase_only_assistant_rows_dropped = 0
 
     for exchange_id in sorted(by_exchange.keys()):
         items = by_exchange[exchange_id]
@@ -201,29 +214,40 @@ def collapse_rows(rows: list[ChatRow]) -> tuple[list[ChatRow], dict[str, int]]:
                         role="user",
                         turn_id=turn_id,
                         exchange_id=exchange_id,
+                        phase="",
                         text=user_text,
                     )
                 )
 
         if assistants:
-            substantive = [a for a in assistants if not is_progress_only_assistant(a.text)]
-            if substantive:
-                final_assistant = substantive[-1]
+            finals = [a for a in assistants if a.phase == "final_answer"]
+            if finals:
+                final_assistant = finals[-1]
                 assistant_rows_dropped += max(0, len(assistants) - 1)
             else:
-                # If user asked something and all assistant rows are progress chatter,
-                # drop assistant rows for cleaner summarizer input.
-                if users:
-                    progress_only_rows_dropped += len(assistants)
+                exchanges_without_final_answer += 1
+                if assistant_selection == "phase_only":
+                    phase_only_assistant_rows_dropped += len(assistants)
                     continue
-                final_assistant = assistants[-1]
-                progress_only_rows_dropped += max(0, len(assistants) - 1)
+                substantive = [a for a in assistants if not is_progress_only_assistant(a.text)]
+                if substantive:
+                    final_assistant = substantive[-1]
+                    assistant_rows_dropped += max(0, len(assistants) - 1)
+                else:
+                    # If user asked something and all assistant rows are progress chatter,
+                    # drop assistant rows for cleaner summarizer input.
+                    if users:
+                        progress_only_rows_dropped += len(assistants)
+                        continue
+                    final_assistant = assistants[-1]
+                    progress_only_rows_dropped += max(0, len(assistants) - 1)
             collapsed.append(
                 ChatRow(
                     ts=final_assistant.ts,
                     role="assistant",
                     turn_id=turn_id,
                     exchange_id=exchange_id,
+                    phase=final_assistant.phase,
                     text=final_assistant.text,
                 )
             )
@@ -232,6 +256,8 @@ def collapse_rows(rows: list[ChatRow]) -> tuple[list[ChatRow], dict[str, int]]:
     return collapsed, {
         "assistant_rows_dropped": assistant_rows_dropped,
         "progress_only_rows_dropped": progress_only_rows_dropped,
+        "exchanges_without_final_answer": exchanges_without_final_answer,
+        "phase_only_assistant_rows_dropped": phase_only_assistant_rows_dropped,
     }
 
 
@@ -245,15 +271,24 @@ def is_progress_only_assistant(text: str) -> bool:
 
 
 def write_exports(
-    rows: list[ChatRow], source: pathlib.Path, output_root: pathlib.Path, mode: str
+    rows: list[ChatRow],
+    source: pathlib.Path,
+    output_root: pathlib.Path,
+    mode: str,
+    assistant_selection: str,
 ) -> pathlib.Path:
     if not rows:
         raise SystemExit("No user/assistant rows found in source session.")
 
     export_rows = rows
-    mode_stats = {"assistant_rows_dropped": 0}
+    mode_stats = {
+        "assistant_rows_dropped": 0,
+        "progress_only_rows_dropped": 0,
+        "exchanges_without_final_answer": 0,
+        "phase_only_assistant_rows_dropped": 0,
+    }
     if mode == "collapsed":
-        export_rows, mode_stats = collapse_rows(rows)
+        export_rows, mode_stats = collapse_rows(rows, assistant_selection)
 
     rel = relative_output_path(source)
     dest_dir = output_root / rel.with_suffix("")
@@ -271,11 +306,17 @@ def write_exports(
     index_lines.append(f"- Source: `{source}`")
     index_lines.append(f"- Export root: `{dest_dir}`")
     index_lines.append(f"- Mode: `{mode}`")
+    index_lines.append(f"- Assistant selection: `{assistant_selection}`")
     index_lines.append(f"- Total days: `{len(day_keys)}`")
     index_lines.append(f"- Total messages: `{len(export_rows)}`")
     if mode == "collapsed":
         index_lines.append(f"- Assistant intermediate rows dropped: `{mode_stats['assistant_rows_dropped']}`")
         index_lines.append(f"- Progress-only assistant rows dropped: `{mode_stats['progress_only_rows_dropped']}`")
+        index_lines.append(f"- Exchanges without final_answer marker: `{mode_stats['exchanges_without_final_answer']}`")
+        if assistant_selection == "phase_only":
+            index_lines.append(
+                f"- phase_only assistant rows dropped: `{mode_stats['phase_only_assistant_rows_dropped']}`"
+            )
     index_lines.append("- Turn label policy: use native turn id when present; otherwise use exchange id.")
     index_lines.append("")
     index_lines.append("## Read Order")
@@ -335,8 +376,18 @@ def main() -> int:
 
     output_root = pathlib.Path(args.output_root).expanduser().resolve()
     rows = collect_rows(source)
-    dest_dir = write_exports(rows, source, output_root, args.mode)
-    print(json.dumps({"source": str(source), "export_dir": str(dest_dir), "messages": len(rows), "mode": args.mode}))
+    dest_dir = write_exports(rows, source, output_root, args.mode, args.assistant_selection)
+    print(
+        json.dumps(
+            {
+                "source": str(source),
+                "export_dir": str(dest_dir),
+                "messages": len(rows),
+                "mode": args.mode,
+                "assistant_selection": args.assistant_selection,
+            }
+        )
+    )
     return 0
 
 
