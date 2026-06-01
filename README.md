@@ -6,6 +6,11 @@ Tools for compacting and continuing long AI agent sessions.
 
 This repo is actively used script tooling, not a packaged release.
 
+Default operator path:
+
+- use `chat_*` scripts first for live session maintenance
+- treat `compact_*` scripts as legacy/advanced or internal support tooling
+
 Current support:
 
 - Codex JSONL
@@ -50,13 +55,21 @@ The goal is to reduce that bulk while preserving what matters for continuation:
 
 ## Quick start
 
-Codex `safe` + `resume` + `chat-resume-hybrid-safe-tail` from the latest session:
+Recommended first commands:
+
+```sh
+python3 chat_codex_session.py --latest --show-summary
+python3 chat_claude_session.py /path/to/claude.jsonl --show-summary
+python3 chat_codex_v2.py --latest --show-summary
+```
+
+Codex `safe` + `resume` profile reproduction (advanced):
 
 ```sh
 ./reproduce_codex_session_profiles.sh --latest
 ```
 
-Claude `safe` from the latest active project session:
+Claude `safe` profile reproduction (advanced):
 
 ```sh
 ./reproduce_claude_safe.sh --latest
@@ -116,27 +129,30 @@ Session markers:
 ## What each script does
 
 - `compact_codex_session.py`
-  - main Codex compactor
+  - legacy/advanced Codex compactor
   - supports `safe`, `resume`, and `--show-lineage`
 - `chat_codex_session.py`
+  - recommended default for Codex live maintenance
   - Codex hybrid chat extractor for resume: chat-only old history + native safe tail
   - safe tail rows are compacted with Codex `safe` rules (tool/output trimming, reasoning cleanup)
   - supports `--latest`, `--show-summary`, and `--show-lineage`
 - `chat_codex_v2.py`
+  - recommended for continuity-focused in-place history reduction
   - Codex in-place continuity rewrite for long sessions
   - preserves JSONL row order and record types; rewrites only old `user`/`assistant` message text
   - keeps newest `--safe-tail-turns` turns fully unchanged
   - targets older history to `--target-ratio` while preserving high-signal paragraphs
   - supports `--latest`, `--show-summary`, and `--show-lineage`
 - `compact_claude_session.py`
-  - conservative Claude compactor
+  - legacy/advanced conservative Claude compactor
   - currently `safe` only, plus `--show-summary` and `--show-lineage`
 - `chat_claude_session.py`
+  - recommended default for Claude live maintenance
   - aggressive Claude chat-only compactor intended for `/resume`
   - emits dialogue (`user`/`assistant` text) plus minimal resume-discovery metadata
   - single behavior (`claude-chat-resume`), plus `--show-summary` and `--show-lineage`
 - `compact_gemini_session.py`
-  - conservative Gemini compactor
+  - legacy/advanced conservative Gemini compactor
   - currently `safe` only, plus `--show-summary` and `--show-lineage`
 - `codex_safety.py`
   - depth guard and model switch detection helpers for Codex compactor
@@ -150,6 +166,12 @@ Session markers:
   - runs `safe`, then `resume` from the same frozen snapshot, plus `chat-resume-hybrid-safe-tail` from source
 - `reproduce_claude_safe.sh`
   - runs Claude `safe` against the latest JSONL in the active Claude project folder
+
+Layout notes:
+
+- root files are active runtime scripts/imports
+- `previous-versions/` is archival/reference only
+- `outputs/` and `_tmp/` are generated/scratch data
 
 ## Claude long-lived hook config (manual)
 
