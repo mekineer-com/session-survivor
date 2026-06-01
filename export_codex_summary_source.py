@@ -21,6 +21,7 @@ class ChatRow:
     ts: datetime
     role: str
     turn_id: int
+    exchange_id: int
     text: str
 
 
@@ -41,6 +42,15 @@ def parse_args() -> argparse.Namespace:
         "--output-root",
         default=str(DEFAULT_OUTPUT_ROOT),
         help="Root output directory.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=("collapsed", "raw"),
+        default="collapsed",
+        help=(
+            "Export mode: 'collapsed' keeps logical user->final-assistant exchanges "
+            "(default), 'raw' keeps every user/assistant message row."
+        ),
     )
     return parser.parse_args()
 
@@ -115,21 +125,84 @@ def collect_rows(source: pathlib.Path) -> list[ChatRow]:
             text = extract_text(payload.get("content"))
             if not text:
                 continue
-            rows.append(ChatRow(ts=ts, role=role, turn_id=turn_id, text=text))
+            rows.append(ChatRow(ts=ts, role=role, turn_id=turn_id, exchange_id=0, text=text))
     rows.sort(key=lambda r: r.ts)
+    assign_exchange_ids(rows)
     return rows
 
 
-def write_exports(rows: list[ChatRow], source: pathlib.Path, output_root: pathlib.Path) -> pathlib.Path:
+def assign_exchange_ids(rows: list[ChatRow]) -> None:
+    exchange_id = 0
+    for row in rows:
+        if row.role == "user":
+            exchange_id += 1
+        elif exchange_id == 0:
+            exchange_id = 1
+        row.exchange_id = exchange_id
+
+
+def collapse_rows(rows: list[ChatRow]) -> tuple[list[ChatRow], dict[str, int]]:
+    by_exchange: dict[int, list[ChatRow]] = {}
+    for row in rows:
+        by_exchange.setdefault(row.exchange_id, []).append(row)
+
+    collapsed: list[ChatRow] = []
+    assistant_rows_dropped = 0
+
+    for exchange_id in sorted(by_exchange.keys()):
+        items = by_exchange[exchange_id]
+        items.sort(key=lambda r: r.ts)
+        users = [r for r in items if r.role == "user"]
+        assistants = [r for r in items if r.role == "assistant"]
+        turn_id = max((r.turn_id for r in items), default=0)
+
+        if users:
+            user_text = "\n\n".join(r.text for r in users).strip()
+            if user_text:
+                collapsed.append(
+                    ChatRow(
+                        ts=users[0].ts,
+                        role="user",
+                        turn_id=turn_id,
+                        exchange_id=exchange_id,
+                        text=user_text,
+                    )
+                )
+
+        if assistants:
+            final_assistant = assistants[-1]
+            collapsed.append(
+                ChatRow(
+                    ts=final_assistant.ts,
+                    role="assistant",
+                    turn_id=turn_id,
+                    exchange_id=exchange_id,
+                    text=final_assistant.text,
+                )
+            )
+            assistant_rows_dropped += max(0, len(assistants) - 1)
+
+    collapsed.sort(key=lambda r: r.ts)
+    return collapsed, {"assistant_rows_dropped": assistant_rows_dropped}
+
+
+def write_exports(
+    rows: list[ChatRow], source: pathlib.Path, output_root: pathlib.Path, mode: str
+) -> pathlib.Path:
     if not rows:
         raise SystemExit("No user/assistant rows found in source session.")
+
+    export_rows = rows
+    mode_stats = {"assistant_rows_dropped": 0}
+    if mode == "collapsed":
+        export_rows, mode_stats = collapse_rows(rows)
 
     rel = relative_output_path(source)
     dest_dir = output_root / rel.with_suffix("")
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     by_day: dict[str, list[ChatRow]] = {}
-    for row in rows:
+    for row in export_rows:
         key = row.ts.date().isoformat()
         by_day.setdefault(key, []).append(row)
 
@@ -139,8 +212,12 @@ def write_exports(rows: list[ChatRow], source: pathlib.Path, output_root: pathli
     index_lines.append("")
     index_lines.append(f"- Source: `{source}`")
     index_lines.append(f"- Export root: `{dest_dir}`")
+    index_lines.append(f"- Mode: `{mode}`")
     index_lines.append(f"- Total days: `{len(day_keys)}`")
-    index_lines.append(f"- Total messages: `{len(rows)}`")
+    index_lines.append(f"- Total messages: `{len(export_rows)}`")
+    if mode == "collapsed":
+        index_lines.append(f"- Assistant intermediate rows dropped: `{mode_stats['assistant_rows_dropped']}`")
+    index_lines.append("- Turn label policy: use native turn id when present; otherwise use exchange id.")
     index_lines.append("")
     index_lines.append("## Read Order")
     index_lines.append("")
@@ -159,7 +236,10 @@ def write_exports(rows: list[ChatRow], source: pathlib.Path, output_root: pathli
             out.write(f"- Time range: `{first_ts}` to `{last_ts}`\n")
             out.write(f"- Character volume: `{char_count}`\n\n")
             for row in items:
-                out.write(f"## {row.ts.isoformat()} | turn {row.turn_id} | {row.role}\n\n")
+                display_turn = row.turn_id if row.turn_id > 0 else row.exchange_id
+                out.write(
+                    f"## {row.ts.isoformat()} | exchange {row.exchange_id} | turn {display_turn} | {row.role}\n\n"
+                )
                 out.write(row.text)
                 out.write("\n\n")
 
@@ -196,8 +276,8 @@ def main() -> int:
 
     output_root = pathlib.Path(args.output_root).expanduser().resolve()
     rows = collect_rows(source)
-    dest_dir = write_exports(rows, source, output_root)
-    print(json.dumps({"source": str(source), "export_dir": str(dest_dir), "messages": len(rows)}))
+    dest_dir = write_exports(rows, source, output_root, args.mode)
+    print(json.dumps({"source": str(source), "export_dir": str(dest_dir), "messages": len(rows), "mode": args.mode}))
     return 0
 
 
