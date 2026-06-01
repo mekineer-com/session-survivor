@@ -25,6 +25,41 @@ class ChatRow:
     text: str
 
 
+PROGRESS_ONLY_PATTERNS = (
+    "i'll do",
+    "i’ll do",
+    "i'll load",
+    "i’ll load",
+    "i'm fixing",
+    "i’m fixing",
+    "i'm compacting",
+    "i’m compacting",
+    "i'll check",
+    "i’ll check",
+    "i'm checking",
+    "i’m checking",
+    "i'm now",
+    "i’m now",
+    "next i’ll",
+    "next i'll",
+    "i'll now",
+    "i’ll now",
+)
+
+FINALISH_MARKERS = (
+    "done",
+    "completed",
+    "fixed",
+    "applied",
+    "committed",
+    "pushed",
+    "verified",
+    "validation passed",
+    "here are",
+    "result",
+)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -148,6 +183,7 @@ def collapse_rows(rows: list[ChatRow]) -> tuple[list[ChatRow], dict[str, int]]:
 
     collapsed: list[ChatRow] = []
     assistant_rows_dropped = 0
+    progress_only_rows_dropped = 0
 
     for exchange_id in sorted(by_exchange.keys()):
         items = by_exchange[exchange_id]
@@ -170,7 +206,18 @@ def collapse_rows(rows: list[ChatRow]) -> tuple[list[ChatRow], dict[str, int]]:
                 )
 
         if assistants:
-            final_assistant = assistants[-1]
+            substantive = [a for a in assistants if not is_progress_only_assistant(a.text)]
+            if substantive:
+                final_assistant = substantive[-1]
+                assistant_rows_dropped += max(0, len(assistants) - 1)
+            else:
+                # If user asked something and all assistant rows are progress chatter,
+                # drop assistant rows for cleaner summarizer input.
+                if users:
+                    progress_only_rows_dropped += len(assistants)
+                    continue
+                final_assistant = assistants[-1]
+                progress_only_rows_dropped += max(0, len(assistants) - 1)
             collapsed.append(
                 ChatRow(
                     ts=final_assistant.ts,
@@ -180,10 +227,21 @@ def collapse_rows(rows: list[ChatRow]) -> tuple[list[ChatRow], dict[str, int]]:
                     text=final_assistant.text,
                 )
             )
-            assistant_rows_dropped += max(0, len(assistants) - 1)
 
     collapsed.sort(key=lambda r: r.ts)
-    return collapsed, {"assistant_rows_dropped": assistant_rows_dropped}
+    return collapsed, {
+        "assistant_rows_dropped": assistant_rows_dropped,
+        "progress_only_rows_dropped": progress_only_rows_dropped,
+    }
+
+
+def is_progress_only_assistant(text: str) -> bool:
+    low = text.strip().lower()
+    if not low:
+        return True
+    if any(marker in low for marker in FINALISH_MARKERS):
+        return False
+    return any(p in low for p in PROGRESS_ONLY_PATTERNS)
 
 
 def write_exports(
@@ -217,6 +275,7 @@ def write_exports(
     index_lines.append(f"- Total messages: `{len(export_rows)}`")
     if mode == "collapsed":
         index_lines.append(f"- Assistant intermediate rows dropped: `{mode_stats['assistant_rows_dropped']}`")
+        index_lines.append(f"- Progress-only assistant rows dropped: `{mode_stats['progress_only_rows_dropped']}`")
     index_lines.append("- Turn label policy: use native turn id when present; otherwise use exchange id.")
     index_lines.append("")
     index_lines.append("## Read Order")
