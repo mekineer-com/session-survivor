@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-message-chars",
         type=int,
-        default=4000,
+        default=8000,
         help="Keep at most this many chars per chat message.",
     )
     parser.add_argument(

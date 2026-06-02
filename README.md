@@ -267,6 +267,7 @@ Use this order:
 - old history becomes chat-focused (`user`/`assistant` text)
 - keeps newest old-history native compacted anchor (`type="compacted"`)
 - keeps a native safe-compacted recent tail (`--safe-tail-turns`, default `1`)
+- max chat message cap defaults to `--max-message-chars 8000` (to avoid truncating weekly-summary blocks)
 - drops old boundary-event spam from the historical section
 - fails loud on format drift or missing `task_started` turns
 - tail compaction knobs: `--max-tool-input-chars`, `--max-reasoning-chars`
@@ -274,6 +275,7 @@ Use this order:
 - usage:
   - `python3 chat_codex_session.py --latest --show-summary`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl`
+  - `python3 chat_codex_session.py /path/to/rollout.jsonl --max-message-chars 8000`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl --safe-tail-turns 8`
 
 `chat-v2-inline-continuity` (`chat_codex_v2.py`):
