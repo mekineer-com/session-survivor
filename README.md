@@ -24,7 +24,7 @@ Current support:
   - `--show-lineage`
 - Codex JSONL
   - `chat-resume-hybrid-safe-tail`
-  - `chat-v2-inline-continuity`
+  - `chat-v3-weekly-summary` (LLM-authored summaries only)
   - `--show-summary`
   - `--show-lineage`
 - Gemini JSON
@@ -60,7 +60,6 @@ Recommended first commands:
 ```sh
 python3 chat_codex_session.py --latest --show-summary
 python3 chat_claude_session.py /path/to/claude.jsonl --show-summary
-python3 chat_codex_v2.py --latest --show-summary
 python3 chat_codex_v3.py --latest --summary-file /path/to/WEEKLY_SUMMARIES.md --show-summary
 ```
 
@@ -89,7 +88,6 @@ Run one-off compaction directly:
 python3 compact_codex_session.py --profile safe /path/to/codex.jsonl
 python3 compact_codex_session.py --profile resume /path/to/codex.jsonl
 python3 chat_codex_session.py --latest --show-summary
-python3 chat_codex_v2.py --latest --show-summary
 python3 chat_codex_v3.py --latest --summary-file /path/to/WEEKLY_SUMMARIES.md --show-summary
 python3 compact_claude_session.py /path/to/claude.jsonl
 python3 chat_claude_session.py /path/to/claude.jsonl
@@ -138,15 +136,8 @@ Session markers:
   - Codex hybrid chat extractor for resume: chat-only old history + native safe tail
   - safe tail rows are compacted with Codex `safe` rules (tool/output trimming, reasoning cleanup)
   - supports `--latest`, `--show-summary`, and `--show-lineage`
-- `chat_codex_v2.py`
-  - recommended for continuity-focused in-place history reduction
-  - Codex in-place continuity rewrite for long sessions
-  - preserves JSONL row order and record types; rewrites only old `user`/`assistant` message text
-  - keeps newest `--safe-tail-turns` turns fully unchanged
-  - targets older history to `--target-ratio` while preserving high-signal paragraphs
-  - supports `--latest`, `--show-summary`, and `--show-lineage`
 - `chat_codex_v3.py`
-  - weekly-summary-driven Codex continuity rewrite
+  - weekly-summary-driven Codex continuity rewrite (consumes LLM-authored summaries)
   - parses `WEEKLY_SUMMARIES.md` and replaces matched old turn ranges with one synthetic weekly summary turn
   - keeps newest `--safe-tail-turns` turns fully unchanged
   - writes candidate output only (no live swap automation)
@@ -280,16 +271,6 @@ Use this order:
   - `python3 chat_codex_session.py /path/to/rollout.jsonl --drop-compacted-anchor`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl --safe-tail-turns 8`
 
-`chat-v2-inline-continuity` (`chat_codex_v2.py`):
-
-- designed for continuity snapshots that stay inside the same session file structure
-- rewrites old-message text in place, keeping chronological/event scaffolding unchanged
-- preserves row count and record types (`response_item`, `event_msg`, `turn_context`, `compacted`, etc.)
-- usage:
-  - `python3 chat_codex_v2.py --latest --show-summary`
-  - `python3 chat_codex_v2.py /path/to/rollout.jsonl --target-ratio 0.20`
-  - `python3 chat_codex_v2.py /path/to/rollout.jsonl --safe-tail-turns 1 --min-summary-chars 220 --max-summary-chars 1600`
-
 `chat-v3 + chat-resume` (recommended when you already have weekly summaries):
 
 1. Build weekly-summary candidate:
@@ -306,6 +287,11 @@ Why this flow:
 
 - `chat_codex_v3.py` preserves continuity by replacing long raw history with week summaries.
 - `chat_codex_session.py --drop-compacted-anchor` removes large native compacted anchor blobs that can inflate baseline context usage.
+
+Summary policy:
+
+- Do not use automated script-generated continuity summaries.
+- Use LLM-authored summaries for `WEEKLY_SUMMARIES.md` (for example Sonnet), then feed those into `chat_codex_v3.py`.
 
 Codex guardrails in `compact_codex_session.py`:
 
