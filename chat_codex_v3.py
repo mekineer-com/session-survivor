@@ -76,6 +76,22 @@ class TurnInfo:
         return self.start_dt.date()
 
 
+@dataclass
+class OldUnit:
+    rows: list[dict[str, Any]]
+    matchable: bool
+    start_dt: datetime | None
+    end_dt: datetime | None
+    model_context_window: int | None
+    collaboration_mode_kind: str | None
+
+    @property
+    def start_day(self) -> date | None:
+        if self.start_dt is None:
+            return None
+        return self.start_dt.date()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -248,6 +264,69 @@ def extract_turn_info(turn: list[dict[str, Any]], fallback_dt: datetime) -> Turn
     )
 
 
+def is_user_assistant_message_row(row: dict[str, Any]) -> bool:
+    if row.get("type") != "response_item":
+        return False
+    payload = row.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("type") != "message":
+        return False
+    role = str(payload.get("role") or "").strip()
+    return role in {"user", "assistant"}
+
+
+def make_old_units(
+    header_rows: list[dict[str, Any]],
+    old_turns: list[list[dict[str, Any]]],
+    all_turn_dts: list[datetime],
+) -> list[OldUnit]:
+    units: list[OldUnit] = []
+    fallback_dt = min(all_turn_dts)
+
+    for row in header_rows:
+        if is_user_assistant_message_row(row):
+            dt = parse_iso_timestamp(row.get("timestamp")) or fallback_dt
+            units.append(
+                OldUnit(
+                    rows=[row],
+                    matchable=True,
+                    start_dt=dt,
+                    end_dt=dt,
+                    model_context_window=None,
+                    collaboration_mode_kind=None,
+                )
+            )
+            fallback_dt = dt
+            continue
+        static_dt = parse_iso_timestamp(row.get("timestamp"))
+        units.append(
+            OldUnit(
+                rows=[row],
+                matchable=False,
+                start_dt=static_dt,
+                end_dt=static_dt,
+                model_context_window=None,
+                collaboration_mode_kind=None,
+            )
+        )
+
+    for turn in old_turns:
+        info = extract_turn_info(turn, fallback_dt=fallback_dt)
+        units.append(
+            OldUnit(
+                rows=info.rows,
+                matchable=True,
+                start_dt=info.start_dt,
+                end_dt=info.end_dt,
+                model_context_window=info.model_context_window,
+                collaboration_mode_kind=info.collaboration_mode_kind,
+            )
+        )
+        fallback_dt = info.end_dt
+    return units
+
+
 def parse_week_range(raw: str, current_year: int, previous_start: date | None) -> tuple[date, date, int]:
     m = WEEK_RANGE_RE.match(raw.strip())
     if not m:
@@ -316,12 +395,14 @@ def parse_weekly_summaries(summary_text: str, anchor_year: int) -> list[WeekBloc
 
 def build_synthetic_week_turn(
     week: WeekBlock,
-    matched_turns: list[TurnInfo],
+    matched_units: list[OldUnit],
     source: pathlib.Path,
     sequence: int,
 ) -> list[dict[str, Any]]:
-    first = matched_turns[0]
-    last = matched_turns[-1]
+    first = matched_units[0]
+    last = matched_units[-1]
+    if first.start_dt is None or last.end_dt is None:
+        raise SystemExit("Internal error: matched weekly units missing timestamps.")
     start_dt = first.start_dt
     end_dt = last.end_dt
     turn_id = str(
@@ -442,19 +523,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if not weeks:
         raise SystemExit(f"No week blocks parsed from summary file: {summary_file}")
 
-    old_infos: list[TurnInfo] = []
-    fallback_dt = min(all_turn_dts)
-    for turn in old_turns:
-        info = extract_turn_info(turn, fallback_dt=fallback_dt)
-        old_infos.append(info)
-        fallback_dt = info.end_dt
+    old_units = make_old_units(header_rows, old_turns, all_turn_dts)
+    matchable_positions = [idx for idx, unit in enumerate(old_units) if unit.matchable and unit.start_day is not None]
 
     week_matches: list[dict[str, Any]] = []
-    matched_turn_indices: set[int] = set()
-    week_by_start_index: dict[int, tuple[WeekBlock, int, int]] = {}
+    matched_positions: set[int] = set()
+    week_by_start_position: dict[int, tuple[WeekBlock, int, int]] = {}
     for week in weeks:
-        indices = [i for i, info in enumerate(old_infos) if week.start <= info.start_day <= week.end]
-        if not indices:
+        week_positions = [
+            pos
+            for pos in matchable_positions
+            if old_units[pos].start_day is not None and week.start <= old_units[pos].start_day <= week.end
+        ]
+        if not week_positions:
             week_matches.append(
                 {
                     "week": week.heading,
@@ -468,25 +549,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 }
             )
             continue
-        first_idx = min(indices)
-        last_idx = max(indices)
-        rows_removed = sum(len(old_infos[i].rows) for i in range(first_idx, last_idx + 1))
+        first_pos = min(week_positions)
+        last_pos = max(week_positions)
+        rows_removed = sum(len(old_units[pos].rows) for pos in week_positions)
         week_matches.append(
             {
                 "week": week.heading,
                 "start_date": week.start.isoformat(),
                 "end_date": week.end.isoformat(),
-                "matched_turns": len(indices),
-                "first_turn_index": first_idx,
-                "last_turn_index": last_idx,
+                "matched_turns": len(week_positions),
+                "first_turn_index": first_pos,
+                "last_turn_index": last_pos,
                 "rows_removed": rows_removed,
                 "rows_added": 3,
             }
         )
-        week_by_start_index[first_idx] = (week, first_idx, last_idx)
-        matched_turn_indices.update(range(first_idx, last_idx + 1))
+        week_by_start_position[first_pos] = (week, first_pos, last_pos)
+        matched_positions.update(week_positions)
 
-    if not matched_turn_indices and not args.force_empty_map:
+    if not matched_positions and not args.force_empty_map:
         raise SystemExit(
             "No old-history turns matched summary week ranges. "
             "Use --force-empty-map to proceed anyway."
@@ -495,21 +576,24 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     rebuilt_old_rows: list[dict[str, Any]] = []
     i = 0
     inserted_week_summaries = 0
-    while i < len(old_infos):
-        start_mapping = week_by_start_index.get(i)
+    while i < len(old_units):
+        start_mapping = week_by_start_position.get(i)
         if start_mapping is None:
-            rebuilt_old_rows.extend(old_infos[i].rows)
+            rebuilt_old_rows.extend(old_units[i].rows)
             i += 1
             continue
-        week, first_idx, last_idx = start_mapping
-        matched = old_infos[first_idx : last_idx + 1]
+        week, first_pos, last_pos = start_mapping
+        matched = [old_units[pos] for pos in range(first_pos, last_pos + 1) if old_units[pos].matchable]
         synthetic = build_synthetic_week_turn(week, matched, source=source, sequence=inserted_week_summaries)
         rebuilt_old_rows.extend(synthetic)
+        for pos in range(first_pos, last_pos + 1):
+            if not old_units[pos].matchable:
+                rebuilt_old_rows.extend(old_units[pos].rows)
         inserted_week_summaries += 1
-        i = last_idx + 1
+        i = last_pos + 1
 
     tail_rows = [row for turn in tail_turns for row in turn]
-    out_rows = [*header_rows, *rebuilt_old_rows, *tail_rows]
+    out_rows = [*rebuilt_old_rows, *tail_rows]
     if not out_rows:
         raise SystemExit("Refusing to write empty output.")
 
@@ -533,6 +617,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             generated_at = ts
             break
 
+    manifest_path_value: str | None = None
     report = {
         "source": str(source),
         "summary_file": str(summary_file),
@@ -546,14 +631,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "bytes_saved": len(original_bytes) - len(compacted_bytes),
         "original_lines": original_validation["line_count"],
         "compacted_lines": compacted_validation["line_count"],
-        "manifest_path": str(manifest_path),
+        "manifest_path": None,
         "changes": {
             "parsed_weeks": len(weeks),
             "inserted_week_summaries": inserted_week_summaries,
-            "matched_old_turns": len(matched_turn_indices),
-            "old_turns_total": len(old_infos),
+            "matched_old_turns": len(matched_positions),
+            "old_turns_total": len(matchable_positions),
             "safe_tail_turns_kept_native": len(tail_turns),
-            "kept_header_records": len(header_rows),
+            "kept_header_records": sum(1 for u in old_units if not u.matchable),
             "kept_safe_tail_records": len(tail_rows),
             "rebuilt_old_records": len(rebuilt_old_rows),
         },
@@ -600,6 +685,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         manifest["policy"]["safe_tail_turns"] = args.safe_tail_turns
         manifest["policy"]["synthetic_week_turn_rows"] = 3
         manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        manifest_path_value = str(manifest_path)
+    report["manifest_path"] = manifest_path_value
     report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return report
 
