@@ -70,6 +70,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print lineage/provenance information for the input session and exit.",
     )
+    parser.add_argument(
+        "--drop-compacted-anchor",
+        action="store_true",
+        help="Drop old-history compacted anchor rows instead of keeping the latest one.",
+    )
     return parser.parse_args()
 
 
@@ -234,9 +239,14 @@ def compact_chat_records(
 
         # Keep only the most recent compacted record, but keep timeline order.
         if obj.get("type") == "compacted":
+            if args.drop_compacted_anchor:
+                state["dropped_compacted_anchor"] += 1
+                continue
             if last_compacted_index is not None and idx == last_compacted_index:
                 compacted.append(obj)
                 state["kept_compacted_anchor"] += 1
+            else:
+                state["dropped_compacted_anchor"] += 1
             continue
 
         if obj.get("type") != "response_item":
@@ -347,6 +357,7 @@ def main() -> int:
         "kept_chat_records": 0,
         "kept_header_records": 0,
         "kept_compacted_anchor": 0,
+        "dropped_compacted_anchor": 0,
         "kept_old_boundary_events": 0,
         "kept_safe_tail_turns": 0,
         "kept_safe_tail_records": 0,
@@ -450,7 +461,11 @@ def main() -> int:
             "max_tool_input_chars": args.max_tool_input_chars,
             "max_reasoning_chars": args.max_reasoning_chars,
             "kept_roles": ["user", "assistant"],
-            "kept_compacted_anchor": "latest_only_for_compacted_history",
+            "kept_compacted_anchor": (
+                "disabled(drop_compacted_anchor=true)"
+                if args.drop_compacted_anchor
+                else "latest_only_for_compacted_history"
+            ),
             "chat_history_kept_boundary_event_types": ["task_started", "task_complete"],
             "chat_history_dropped_event_types": ["turn_aborted"],
             "safe_tail_kept_record_types": ["event_msg", "response_item", "turn_context", "compacted"],
@@ -482,6 +497,7 @@ def main() -> int:
     manifest["policy"]["safe_tail_turns"] = args.safe_tail_turns
     manifest["policy"]["max_tool_input_chars"] = args.max_tool_input_chars
     manifest["policy"]["max_reasoning_chars"] = args.max_reasoning_chars
+    manifest["policy"]["drop_compacted_anchor"] = args.drop_compacted_anchor
     manifest["policy"]["kept_roles"] = ["user", "assistant"]
     manifest["policy"]["kept_compacted_anchor"] = "latest_only_for_compacted_history"
     manifest["policy"]["chat_history_dropped_event_types"] = ["task_started", "task_complete", "turn_aborted"]
