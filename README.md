@@ -61,6 +61,7 @@ Recommended first commands:
 python3 chat_codex_session.py --latest --show-summary
 python3 chat_claude_session.py /path/to/claude.jsonl --show-summary
 python3 chat_codex_v2.py --latest --show-summary
+python3 chat_codex_v3.py --latest --summary-file /path/to/WEEKLY_SUMMARIES.md --show-summary
 ```
 
 Codex `safe` + `resume` profile reproduction (advanced):
@@ -89,6 +90,7 @@ python3 compact_codex_session.py --profile safe /path/to/codex.jsonl
 python3 compact_codex_session.py --profile resume /path/to/codex.jsonl
 python3 chat_codex_session.py --latest --show-summary
 python3 chat_codex_v2.py --latest --show-summary
+python3 chat_codex_v3.py --latest --summary-file /path/to/WEEKLY_SUMMARIES.md --show-summary
 python3 compact_claude_session.py /path/to/claude.jsonl
 python3 chat_claude_session.py /path/to/claude.jsonl
 python3 compact_gemini_session.py /path/to/gemini-session.json
@@ -143,6 +145,12 @@ Session markers:
   - keeps newest `--safe-tail-turns` turns fully unchanged
   - targets older history to `--target-ratio` while preserving high-signal paragraphs
   - supports `--latest`, `--show-summary`, and `--show-lineage`
+- `chat_codex_v3.py`
+  - weekly-summary-driven Codex continuity rewrite
+  - parses `WEEKLY_SUMMARIES.md` and replaces matched old turn ranges with one synthetic weekly summary turn
+  - keeps newest `--safe-tail-turns` turns fully unchanged
+  - writes candidate output only (no live swap automation)
+  - supports `--latest`, `--summary-file`, `--dry-run-only`, `--show-summary`, and `--show-lineage`
 - `compact_claude_session.py`
   - legacy/advanced conservative Claude compactor
   - currently `safe` only, plus `--show-summary` and `--show-lineage`
