@@ -166,6 +166,10 @@ Session markers:
 - `reproduce_claude_safe.sh`
   - runs Claude `safe` against the latest JSONL in the active Claude project folder
 
+Codex model migration notes:
+
+- `gpt-5.3-codex` <-> `gpt-5.5` JSONL compatibility and caveats are documented in `CODEX_5_3_5_5_JSONL_COMPAT.md`.
+
 Layout notes:
 
 - root files are active runtime scripts/imports
