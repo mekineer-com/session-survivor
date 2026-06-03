@@ -500,7 +500,8 @@ def main() -> int:
     manifest["policy"]["drop_compacted_anchor"] = args.drop_compacted_anchor
     manifest["policy"]["kept_roles"] = ["user", "assistant"]
     manifest["policy"]["kept_compacted_anchor"] = "latest_only_for_compacted_history"
-    manifest["policy"]["chat_history_dropped_event_types"] = ["task_started", "task_complete", "turn_aborted"]
+    manifest["policy"]["chat_history_kept_boundary_event_types"] = ["task_started", "task_complete"]
+    manifest["policy"]["chat_history_dropped_event_types"] = ["turn_aborted"]
     manifest["policy"]["safe_tail_kept_record_types"] = ["event_msg", "response_item", "turn_context", "compacted"]
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
