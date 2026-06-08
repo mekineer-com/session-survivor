@@ -10,8 +10,10 @@ import pathlib
 import re
 import sys
 import uuid
+from types import SimpleNamespace
 from typing import Any
 
+from compact_claude_session import compact_record as compact_native_record
 from lineage import build_compaction_manifest, describe_lineage
 
 
@@ -44,6 +46,24 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=2400,
         help="Keep at most this many chars per merged chat message.",
+    )
+    parser.add_argument(
+        "--safe-tail-turns",
+        type=int,
+        default=0,
+        help="Keep this many most recent user turns in native safe-compacted Claude schema.",
+    )
+    parser.add_argument(
+        "--max-tail-tool-output-chars",
+        type=int,
+        default=400,
+        help="Keep at most this many chars of bulky tool output in the native safe tail.",
+    )
+    parser.add_argument(
+        "--max-tail-file-history-entries",
+        type=int,
+        default=8,
+        help="Keep at most this many file-history entries in the native safe tail.",
     )
     parser.add_argument(
         "--show-summary",
@@ -242,15 +262,91 @@ def chat_envelope_fields(obj: dict[str, Any], defaults: dict[str, str]) -> dict[
     return out
 
 
+def is_user_turn_start(obj: dict[str, Any]) -> bool:
+    if obj.get("type") != "user" or obj.get("isCompactSummary"):
+        return False
+    message = obj.get("message")
+    if not isinstance(message, dict) or message.get("role") != "user":
+        return False
+    text = extract_message_text(message.get("content"))
+    return bool(text and not is_meta_noise(text) and not is_continuation_summary(text))
+
+
+def safe_tail_start_index(records: list[dict[str, Any]], tail_turns: int) -> int:
+    if tail_turns <= 0:
+        return len(records)
+
+    found = 0
+    for idx in range(len(records) - 1, -1, -1):
+        if is_user_turn_start(records[idx]):
+            found += 1
+            if found == tail_turns:
+                return idx
+    return 0
+
+
+def last_uuid(records: list[dict[str, Any]]) -> str | None:
+    for row in reversed(records):
+        value = row.get("uuid")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def compact_native_tail_records(
+    records: list[dict[str, Any]],
+    parent_uuid: str | None,
+    args: argparse.Namespace,
+    state: dict[str, int],
+) -> list[dict[str, Any]]:
+    tail_args = SimpleNamespace(
+        max_tool_output_chars=args.max_tail_tool_output_chars,
+        max_file_history_entries=args.max_tail_file_history_entries,
+    )
+    tail_state = {
+        "thinking_blocks_removed": 0,
+        "tool_outputs_truncated": 0,
+        "message_content_truncated": 0,
+        "local_command_truncated": 0,
+        "message_usage_compacted": 0,
+        "file_history_snapshots_compacted": 0,
+    }
+
+    compacted: list[dict[str, Any]] = []
+    parent_rewritten = False
+    for obj in records:
+        if obj.get("type") == "custom-title":
+            state["safe_tail_custom_title_dropped"] += 1
+            continue
+        row = compact_native_record(obj, tail_args, tail_state)
+        if not parent_rewritten and isinstance(row.get("uuid"), str):
+            if parent_uuid:
+                row["parentUuid"] = parent_uuid
+                state["safe_tail_parent_rewritten"] += 1
+            else:
+                row.pop("parentUuid", None)
+            parent_rewritten = True
+        compacted.append(row)
+
+    state["safe_tail_thinking_blocks_removed"] = tail_state["thinking_blocks_removed"]
+    state["safe_tail_tool_outputs_truncated"] = tail_state["tool_outputs_truncated"]
+    state["safe_tail_message_content_truncated"] = tail_state["message_content_truncated"]
+    state["safe_tail_local_command_truncated"] = tail_state["local_command_truncated"]
+    state["safe_tail_message_usage_compacted"] = tail_state["message_usage_compacted"]
+    state["safe_tail_file_history_snapshots_compacted"] = tail_state["file_history_snapshots_compacted"]
+    return compacted
+
+
 def compact_chat_records(
     records: list[dict[str, Any]],
+    session_records: list[dict[str, Any]],
     source: pathlib.Path,
     args: argparse.Namespace,
     state: dict[str, int],
 ) -> list[dict[str, Any]]:
     compacted: list[dict[str, Any]] = []
-    session_defaults = detect_session_defaults(records, source)
-    custom_title = latest_custom_title_record(records)
+    session_defaults = detect_session_defaults(session_records, source)
+    custom_title = latest_custom_title_record(session_records)
     if custom_title is not None:
         kept_title: dict[str, Any] = {"type": "custom-title", "customTitle": custom_title["customTitle"]}
         session_id = custom_title.get("sessionId")
@@ -345,6 +441,12 @@ def main() -> int:
     args = parse_args()
     if args.max_message_chars < 80:
         raise SystemExit("max-message-chars must be >= 80.")
+    if args.safe_tail_turns < 0:
+        raise SystemExit("safe-tail-turns must be >= 0.")
+    if args.max_tail_tool_output_chars < 80:
+        raise SystemExit("max-tail-tool-output-chars must be >= 80.")
+    if args.max_tail_file_history_entries < 1:
+        raise SystemExit("max-tail-file-history-entries must be >= 1.")
 
     source = pathlib.Path(args.session).expanduser().resolve()
     if not source.exists():
@@ -381,8 +483,27 @@ def main() -> int:
         "messages_truncated": 0,
         "synthetic_uuid_assigned": 0,
         "synthetic_timestamp_assigned": 0,
+        "kept_safe_tail_turns": 0,
+        "kept_safe_tail_records": 0,
+        "safe_tail_custom_title_dropped": 0,
+        "safe_tail_parent_rewritten": 0,
+        "safe_tail_thinking_blocks_removed": 0,
+        "safe_tail_tool_outputs_truncated": 0,
+        "safe_tail_message_content_truncated": 0,
+        "safe_tail_local_command_truncated": 0,
+        "safe_tail_message_usage_compacted": 0,
+        "safe_tail_file_history_snapshots_compacted": 0,
     }
-    compacted = compact_chat_records(records, source, args, state)
+    tail_start = safe_tail_start_index(records, args.safe_tail_turns)
+    old_records = records[:tail_start]
+    tail_records = records[tail_start:]
+    state["kept_safe_tail_turns"] = min(args.safe_tail_turns, sum(1 for obj in records if is_user_turn_start(obj)))
+
+    compacted = compact_chat_records(old_records, records, source, args, state)
+    tail_parent_uuid = last_uuid(compacted)
+    safe_tail = compact_native_tail_records(tail_records, tail_parent_uuid, args, state)
+    state["kept_safe_tail_records"] = len(safe_tail)
+    compacted.extend(safe_tail)
     if not compacted:
         raise SystemExit("No chat records survived filtering; refusing to write empty resume file.")
     warnings: list[str] = []
@@ -413,8 +534,12 @@ def main() -> int:
         "policy": {
             "profile": "claude-chat-resume",
             "max_message_chars": args.max_message_chars,
+            "safe_tail_turns": args.safe_tail_turns,
+            "max_tail_tool_output_chars": args.max_tail_tool_output_chars,
+            "max_tail_file_history_entries": args.max_tail_file_history_entries,
             "required_resume_identity": "uuid",
             "meta_noise_filter": True,
+            "safe_tail_kept_record_types": "native Claude records after tail start, safe-compacted",
         },
     }
 
@@ -430,12 +555,15 @@ def main() -> int:
         original_lines=original_validation["line_count"],
         compacted_lines=compacted_validation["line_count"],
         bytes_saved=len(original_bytes) - len(compacted_bytes),
-        keep_last_turns=0,
+        keep_last_turns=args.safe_tail_turns,
         max_replacement_records=0,
     )
     manifest.setdefault("policy", {})
     manifest["policy"]["required_resume_identity"] = "uuid"
     manifest["policy"]["max_message_chars"] = args.max_message_chars
+    manifest["policy"]["safe_tail_turns"] = args.safe_tail_turns
+    manifest["policy"]["max_tail_tool_output_chars"] = args.max_tail_tool_output_chars
+    manifest["policy"]["max_tail_file_history_entries"] = args.max_tail_file_history_entries
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     marker_path = write_thread_marker(

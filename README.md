@@ -355,6 +355,7 @@ Claude chat-resume mode (`chat_claude_session.py`):
 
 - purpose:
   - strip Claude session JSONL to chat dialogue only while keeping it resumable
+  - optionally keep the newest native safe tail when the current turn needs more than chat-only context
 - kept records:
   - latest `custom-title` record (`type=custom-title`, `customTitle`, optional `sessionId`)
   - top-level `type in {user, assistant}`
@@ -364,8 +365,9 @@ Claude chat-resume mode (`chat_claude_session.py`):
   - `uuid` (chosen resume identity field)
   - lightweight envelope keys from each kept chat row when present:
     - `parentUuid`, `isSidechain`, `sessionId`, `userType`, `entrypoint`, `cwd`, `version`, `gitBranch`, `slug`, `permissionMode`
+  - with `--safe-tail-turns N`: the newest N user turns stay as native Claude records, with thinking blocks removed and bulky tool/file-history data bounded
 - dropped records:
-  - attachments, queue/status lineage, most permission/status records, file-history snapshots, non-text tool payloads
+  - old-history attachments, queue/status lineage, most permission/status records, file-history snapshots, non-text tool payloads
   - command/meta wrapper chatter (`<local-command-caveat>`, `<command-name>`, task notifications)
 - guardrails:
   - idempotent truncation (re-running chat-resume does not keep shortening already-compacted placeholders)
@@ -386,6 +388,9 @@ python3 chat_claude_session.py /path/to/claude.jsonl
 
 # Optional: tighter per-message cap
 python3 chat_claude_session.py /path/to/claude.jsonl --max-message-chars 1600
+
+# Optional: keep the newest native turn when Claude hit the context ceiling before an important answer
+python3 chat_claude_session.py /path/to/claude.jsonl --safe-tail-turns 1
 ```
 
 Post-swap hygiene for Claude sessions:
