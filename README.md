@@ -265,6 +265,7 @@ Use this order:
 - keeps a native safe-compacted recent tail (`--safe-tail-turns`, default `1`)
 - max chat message cap defaults to `--max-message-chars 8000` (to avoid truncating weekly-summary blocks)
 - drops old boundary-event spam from the historical section
+- closes old dangling turns so resume does not replay stale interruption banners
 - fails loud on format drift or missing `task_started` turns
 - tail compaction knobs: `--max-tool-input-chars`, `--max-reasoning-chars`
 - source selection rule: use exactly one source (`--latest` or explicit path)

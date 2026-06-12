@@ -213,6 +213,35 @@ def split_session_objects(records: list[dict[str, Any]]) -> tuple[list[dict[str,
     return header, turns
 
 
+def closing_task_complete(turn: list[dict[str, Any]], state: dict[str, int]) -> dict[str, Any]:
+    started = next((obj for obj in turn if turn_boundary_type(obj) == "task_started"), None)
+    if started is None:
+        raise ValueError("Cannot close turn without task_started.")
+    payload = started.get("payload", {})
+    turn_id = payload.get("turn_id") if isinstance(payload, dict) else None
+    if not isinstance(turn_id, str) or not turn_id:
+        raise ValueError("Cannot close turn without task_started turn_id.")
+
+    timestamp = next(
+        (
+            obj.get("timestamp")
+            for obj in reversed(turn)
+            if isinstance(obj.get("timestamp"), str) and obj.get("timestamp")
+        ),
+        "1970-01-01T00:00:00.000Z",
+    )
+    state["synthetic_old_task_complete"] += 1
+    return {
+        "type": "event_msg",
+        "timestamp": timestamp,
+        "payload": {
+            "type": "task_complete",
+            "turn_id": turn_id,
+            "last_agent_message": None,
+        },
+    }
+
+
 def compact_chat_records(
     records: list[dict[str, Any]],
     args: argparse.Namespace,
@@ -308,6 +337,17 @@ def compact_chat_records(
     return compacted
 
 
+def compact_old_turn(
+    turn: list[dict[str, Any]],
+    args: argparse.Namespace,
+    state: dict[str, int],
+) -> list[dict[str, Any]]:
+    rows = compact_chat_records(turn, args, state)
+    if not any(turn_boundary_type(obj) == "task_complete" for obj in turn):
+        rows.append(closing_task_complete(turn, state))
+    return rows
+
+
 def main() -> int:
     args = parse_args()
     if args.max_message_chars < 80:
@@ -369,6 +409,7 @@ def main() -> int:
         "dropped_bootstrap_noise": 0,
         "dropped_meta_noise": 0,
         "dropped_old_boundary_events": 0,
+        "synthetic_old_task_complete": 0,
         "messages_truncated": 0,
         "synthetic_timestamp_assigned": 0,
         "safe_tail_reasoning_encrypted_removed": 0,
@@ -394,8 +435,9 @@ def main() -> int:
     state["chat_compacted_old_turns"] = len(old_turns)
     state["kept_safe_tail_turns"] = len(tail_turns)
 
-    old_rows = [obj for turn in old_turns for obj in turn]
-    chat_rows = compact_chat_records(old_rows, args, state) if old_rows else []
+    chat_rows = []
+    for turn in old_turns:
+        chat_rows.extend(compact_old_turn(turn, args, state))
 
     safe_tail_state = {
         "reasoning_encrypted_removed": 0,
