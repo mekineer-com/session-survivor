@@ -248,12 +248,6 @@ def compact_chat_records(
     state: dict[str, int],
 ) -> list[dict[str, Any]]:
     compacted: list[dict[str, Any]] = []
-    last_compacted_index: int | None = None
-
-    for idx, obj in enumerate(records):
-        if obj.get("type") == "compacted":
-            last_compacted_index = idx
-
     for idx, obj in enumerate(records):
         boundary = turn_boundary_type(obj)
         if boundary == "turn_aborted":
@@ -266,16 +260,10 @@ def compact_chat_records(
             state["kept_old_boundary_events"] += 1
             continue
 
-        # Keep only the most recent compacted record, but keep timeline order.
+        # Preserve compacted records here; old-history anchor policy is applied
+        # once across header + all old turns so "latest" means latest globally.
         if obj.get("type") == "compacted":
-            if args.drop_compacted_anchor:
-                state["dropped_compacted_anchor"] += 1
-                continue
-            if last_compacted_index is not None and idx == last_compacted_index:
-                compacted.append(obj)
-                state["kept_compacted_anchor"] += 1
-            else:
-                state["dropped_compacted_anchor"] += 1
+            compacted.append(obj)
             continue
 
         if obj.get("type") != "response_item":
@@ -335,6 +323,34 @@ def compact_chat_records(
         state["kept_chat_records"] += 1
 
     return compacted
+
+
+def apply_old_compacted_anchor_policy(
+    rows: list[dict[str, Any]],
+    args: argparse.Namespace,
+    state: dict[str, int],
+) -> list[dict[str, Any]]:
+    """Apply compacted-anchor policy across all old-history rows."""
+    last_compacted_index = None
+    if not args.drop_compacted_anchor:
+        for idx, obj in enumerate(rows):
+            if obj.get("type") == "compacted":
+                last_compacted_index = idx
+
+    filtered: list[dict[str, Any]] = []
+    for idx, obj in enumerate(rows):
+        if obj.get("type") != "compacted":
+            filtered.append(obj)
+            continue
+        if args.drop_compacted_anchor:
+            state["dropped_compacted_anchor"] += 1
+            continue
+        if idx == last_compacted_index:
+            filtered.append(obj)
+            state["kept_compacted_anchor"] += 1
+        else:
+            state["dropped_compacted_anchor"] += 1
+    return filtered
 
 
 def compact_old_turn(
@@ -439,6 +455,8 @@ def main() -> int:
     for turn in old_turns:
         chat_rows.extend(compact_old_turn(turn, args, state))
 
+    old_history_rows = apply_old_compacted_anchor_policy(header_rows + chat_rows, args, state)
+
     safe_tail_state = {
         "reasoning_encrypted_removed": 0,
         "tool_outputs_truncated": 0,
@@ -460,13 +478,11 @@ def main() -> int:
     state["safe_tail_duplicated_instruction_messages"] = safe_tail_state["duplicated_instruction_messages"]
     state["safe_tail_scratch_artifacts_removed"] = safe_tail_state["scratch_artifacts_removed"]
 
-    if not header_rows and not chat_rows and not safe_tail_rows:
+    if not old_history_rows and not safe_tail_rows:
         raise SystemExit("No records survived filtering; refusing to write empty output file.")
 
     with compacted_copy.open("w", encoding="utf-8") as dst:
-        for row in header_rows:
-            dst.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
-        for row in chat_rows:
+        for row in old_history_rows:
             dst.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
         for row in safe_tail_rows:
             dst.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
