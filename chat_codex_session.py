@@ -498,6 +498,17 @@ def main() -> int:
     elif header_rows:
         generated_at = header_rows[-1].get("timestamp")
 
+    compacted_anchor_policy = (
+        "disabled(drop_compacted_anchor=true)"
+        if args.drop_compacted_anchor
+        else "latest_only_for_compacted_history"
+    )
+    old_history_output_type = (
+        "chat-compacted-history(response_item.message)"
+        if args.drop_compacted_anchor
+        else "chat-compacted-history(response_item.message + compacted(latest))"
+    )
+
     report = {
         "source": str(source),
         "original_copy": str(original_copy),
@@ -519,17 +530,13 @@ def main() -> int:
             "max_tool_input_chars": args.max_tool_input_chars,
             "max_reasoning_chars": args.max_reasoning_chars,
             "kept_roles": ["user", "assistant"],
-            "kept_compacted_anchor": (
-                "disabled(drop_compacted_anchor=true)"
-                if args.drop_compacted_anchor
-                else "latest_only_for_compacted_history"
-            ),
+            "kept_compacted_anchor": compacted_anchor_policy,
             "chat_history_kept_boundary_event_types": ["task_started", "task_complete"],
             "chat_history_dropped_event_types": ["turn_aborted"],
             "safe_tail_kept_record_types": ["event_msg", "response_item", "turn_context", "compacted"],
             "output_record_types": [
                 "session_meta/header",
-                "chat-compacted-history(response_item.message + compacted(latest))",
+                old_history_output_type,
                 "safe-tail(native turn records)",
             ],
         },
@@ -557,7 +564,7 @@ def main() -> int:
     manifest["policy"]["max_reasoning_chars"] = args.max_reasoning_chars
     manifest["policy"]["drop_compacted_anchor"] = args.drop_compacted_anchor
     manifest["policy"]["kept_roles"] = ["user", "assistant"]
-    manifest["policy"]["kept_compacted_anchor"] = "latest_only_for_compacted_history"
+    manifest["policy"]["kept_compacted_anchor"] = compacted_anchor_policy
     manifest["policy"]["chat_history_kept_boundary_event_types"] = ["task_started", "task_complete"]
     manifest["policy"]["chat_history_dropped_event_types"] = ["turn_aborted"]
     manifest["policy"]["safe_tail_kept_record_types"] = ["event_msg", "response_item", "turn_context", "compacted"]
