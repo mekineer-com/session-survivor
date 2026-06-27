@@ -215,10 +215,6 @@ Use two path placeholders:
           {
             "type": "command",
             "command": "path-to-session-survivor/_tools/hooks/claude-read-before-write-gate.sh"
-          },
-          {
-            "type": "command",
-            "command": "path-to-session-survivor/_tools/hooks/doc-backup.sh"
           }
         ]
       }
@@ -231,7 +227,6 @@ Notes:
 
 - Merge these entries into your existing `hooks` object; do not overwrite unrelated hooks.
 - Optional: set `CLAUDE_READ_FRESHNESS_SECONDS` to tune read freshness window (default 3600).
-- Optional: set `DOC_BACKUP_ARCHIVE_DIR` to override backup destination; default is `path-to-session-survivor/_archive/doc-versions`.
 
 ## Current behavior
 
