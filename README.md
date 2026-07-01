@@ -255,8 +255,8 @@ Use this order:
 `chat-resume-hybrid-safe-tail` (`chat_codex_session.py`):
 
 - old history becomes chat-focused (`user`/`assistant` text)
-- keeps newest old-history native compacted anchor (`type="compacted"`)
-- optional `--drop-compacted-anchor` removes compacted anchor rows from old history
+- drops old-history compacted anchor rows by default
+- optional `--keep-compacted-anchor` keeps the newest old-history native compacted anchor (`type="compacted"`)
 - keeps a native safe-compacted recent tail (`--safe-tail-turns`, default `1`)
 - max chat message cap defaults to `--max-message-chars 8000` (to avoid truncating weekly-summary blocks)
 - drops old boundary-event spam from the historical section
@@ -268,7 +268,7 @@ Use this order:
   - `python3 chat_codex_session.py --latest --show-summary`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl --max-message-chars 8000`
-  - `python3 chat_codex_session.py /path/to/rollout.jsonl --drop-compacted-anchor`
+  - `python3 chat_codex_session.py /path/to/rollout.jsonl --keep-compacted-anchor`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl --safe-tail-turns 8`
 
 Pre-boundary repair:
@@ -277,7 +277,7 @@ Pre-boundary repair:
 - `chat_codex_session.py` refuses those because treating them as permanent header can leave the session too large to resume/compact
 - repair explicitly, then run chat compaction on the repaired copy:
   - `python3 repair_codex_preboundary_header.py /path/to/rollout.jsonl`
-  - `python3 chat_codex_session.py /path/to/repaired.jsonl --drop-compacted-anchor --show-summary`
+  - `python3 chat_codex_session.py /path/to/repaired.jsonl --show-summary`
   - swap only after JSON validation and a sane summary (`messages_truncated` should be `0`)
 
 `chat-v3 + chat-resume` (recommended when you already have weekly summaries):
@@ -285,7 +285,7 @@ Pre-boundary repair:
 1. Build weekly-summary candidate:
    - `python3 chat_codex_v3.py /path/to/live-rollout.jsonl --summary-file /path/to/WEEKLY_SUMMARIES.md --safe-tail-turns 1 --show-summary`
 2. Optional second pass to reduce structure overhead:
-   - `python3 chat_codex_session.py /path/to/chat_codex_v3_output.jsonl --max-message-chars 8000 --drop-compacted-anchor --show-summary`
+   - `python3 chat_codex_session.py /path/to/chat_codex_v3_output.jsonl --max-message-chars 8000 --show-summary`
 3. Verify before swap:
    - `messages_truncated` is `0`
    - summary rows are present (for example, `rg '^## Week of ' ...`)
@@ -295,7 +295,7 @@ Pre-boundary repair:
 Why this flow:
 
 - `chat_codex_v3.py` preserves continuity by replacing long raw history with week summaries.
-- `chat_codex_session.py --drop-compacted-anchor` removes large native compacted anchor blobs that can inflate baseline context usage.
+- `chat_codex_session.py` removes large native compacted anchor blobs by default because they can inflate baseline context usage.
 
 Summary policy:
 

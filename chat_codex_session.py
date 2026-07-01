@@ -72,10 +72,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print lineage/provenance information for the input session and exit.",
     )
-    parser.add_argument(
+    anchor_group = parser.add_mutually_exclusive_group()
+    anchor_group.add_argument(
         "--drop-compacted-anchor",
+        dest="drop_compacted_anchor",
         action="store_true",
-        help="Drop old-history compacted anchor rows instead of keeping the latest one.",
+        default=True,
+        help="Drop old-history compacted anchor rows (default).",
+    )
+    anchor_group.add_argument(
+        "--keep-compacted-anchor",
+        dest="drop_compacted_anchor",
+        action="store_false",
+        help="Keep the latest old-history compacted anchor row.",
     )
     return parser.parse_args()
 
