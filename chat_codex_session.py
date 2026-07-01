@@ -16,6 +16,8 @@ from lineage import build_compaction_manifest, describe_lineage
 SESSION_ROOT = pathlib.Path.home() / ".codex" / "sessions"
 DEFAULT_OUTPUT_ROOT = pathlib.Path("/home/marcos/apps-codex/session-survivor/outputs/codex-chat-resume-hybrid-safe-tail")
 PLACEHOLDER = "[Compacted Codex chat message"
+MAX_PRE_BOUNDARY_HEADER_BYTES = 512_000
+MAX_PRE_BOUNDARY_HEADER_RECORDS = 128
 
 
 def parse_args() -> argparse.Namespace:
@@ -211,6 +213,10 @@ def split_session_objects(records: list[dict[str, Any]]) -> tuple[list[dict[str,
     if current is not None:
         turns.append(current)
     return header, turns
+
+
+def pre_boundary_payload_rows(header: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [obj for obj in header if obj.get("type") != "session_meta"]
 
 
 def closing_task_complete(turn: list[dict[str, Any]], state: dict[str, int]) -> dict[str, Any]:
@@ -443,6 +449,14 @@ def main() -> int:
     header_rows, turns = split_session_objects(records)
     if not turns:
         raise SystemExit("Input session has no task_started turns; refusing chat compaction output.")
+    pre_boundary_rows = pre_boundary_payload_rows(header_rows)
+    pre_boundary_bytes = sum(len(json.dumps(obj, ensure_ascii=False)) + 1 for obj in pre_boundary_rows)
+    if len(pre_boundary_rows) > MAX_PRE_BOUNDARY_HEADER_RECORDS or pre_boundary_bytes > MAX_PRE_BOUNDARY_HEADER_BYTES:
+        raise SystemExit(
+            "Pre-boundary history is too large for chat compaction "
+            f"({len(pre_boundary_rows)} records, {pre_boundary_bytes} bytes before first task_started). "
+            "Run repair_codex_preboundary_header.py first, then rerun chat_codex_session.py."
+        )
     state["kept_header_records"] = len(header_rows)
 
     safe_tail_turns = min(args.safe_tail_turns, len(turns))

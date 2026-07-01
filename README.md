@@ -271,6 +271,15 @@ Use this order:
   - `python3 chat_codex_session.py /path/to/rollout.jsonl --drop-compacted-anchor`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl --safe-tail-turns 8`
 
+Pre-boundary repair:
+
+- old Codex sessions may contain thousands of chat rows before the first `task_started`
+- `chat_codex_session.py` refuses those because treating them as permanent header can leave the session too large to resume/compact
+- repair explicitly, then run chat compaction on the repaired copy:
+  - `python3 repair_codex_preboundary_header.py /path/to/rollout.jsonl`
+  - `python3 chat_codex_session.py /path/to/repaired.jsonl --drop-compacted-anchor --show-summary`
+  - swap only after JSON validation and a sane summary (`messages_truncated` should be `0`)
+
 `chat-v3 + chat-resume` (recommended when you already have weekly summaries):
 
 1. Build weekly-summary candidate:
