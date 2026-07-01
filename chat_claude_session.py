@@ -26,6 +26,7 @@ COMMAND_WRAPPER_RE = re.compile(
     re.DOTALL,
 )
 CONTINUATION_SUMMARY_PREFIX = "This session is being continued from a previous conversation that ran out of context."
+ASSISTANT_MODEL_FALLBACK = "claude-sonnet-4-6"
 
 
 def parse_args() -> argparse.Namespace:
@@ -417,6 +418,9 @@ def compact_chat_records(
                 "content": resume_content,
             },
         }
+        if role == "assistant":
+            model = message.get("model")
+            row["message"]["model"] = model if isinstance(model, str) and model else ASSISTANT_MODEL_FALLBACK
         if compact_summary:
             row["isCompactSummary"] = True
             row["isVisibleInTranscriptOnly"] = True
