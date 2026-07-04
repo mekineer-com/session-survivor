@@ -357,15 +357,28 @@ def apply_old_compacted_anchor_policy(
             filtered.append(obj)
             continue
         if idx == last_compacted_index:
-            state["kept_compacted_anchor"] += 1
             if args.drop_compacted_anchor:
-                filtered.append(strip_compacted_replacement_history(obj, state))
+                append_compacted_anchor(filtered, strip_compacted_replacement_history(obj, state), state)
             else:
                 filtered.append(obj)
+                state["kept_compacted_anchor"] += 1
         else:
-            state["kept_compacted_anchor"] += 1
-            filtered.append(strip_compacted_replacement_history(obj, state))
+            append_compacted_anchor(filtered, strip_compacted_replacement_history(obj, state), state)
     return filtered
+
+
+def append_compacted_anchor(
+    rows: list[dict[str, Any]],
+    obj: dict[str, Any],
+    state: dict[str, int],
+) -> None:
+    payload = obj.get("payload")
+    message = payload.get("message") if isinstance(payload, dict) else None
+    if isinstance(message, str) and message.strip():
+        rows.append(obj)
+        state["kept_compacted_anchor"] += 1
+        return
+    state["dropped_empty_compacted_anchor"] += 1
 
 
 def strip_compacted_replacement_history(obj: dict[str, Any], state: dict[str, int]) -> dict[str, Any]:
@@ -441,6 +454,7 @@ def main() -> int:
         "kept_header_records": 0,
         "kept_compacted_anchor": 0,
         "dropped_compacted_anchor": 0,
+        "dropped_empty_compacted_anchor": 0,
         "stripped_compacted_replacement_history": 0,
         "kept_old_boundary_events": 0,
         "kept_safe_tail_turns": 0,
@@ -540,7 +554,7 @@ def main() -> int:
         else "latest_replacement_history_kept_older_stripped"
     )
     old_history_output_type = (
-        "chat-compacted-history(response_item.message + compacted(shells))"
+        "chat-compacted-history(response_item.message + compacted(nonempty messages))"
         if args.drop_compacted_anchor
         else "chat-compacted-history(response_item.message + compacted(shells, latest full))"
     )

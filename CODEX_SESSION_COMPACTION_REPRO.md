@@ -99,7 +99,7 @@ For `resume`:
 For `chat-resume-hybrid-safe-tail`:
 
 1. `changes.kept_safe_tail_turns` is expected
-2. `changes.kept_compacted_anchor` preserves compacted row shells
+2. `changes.kept_compacted_anchor` preserves readable compacted summaries
 3. `changes.stripped_compacted_replacement_history` shows bulky anchor fillings were removed
 4. `policy.chat_history_dropped_event_types` matches expected dropped old events
 

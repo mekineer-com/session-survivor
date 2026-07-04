@@ -256,7 +256,7 @@ Use this order:
 `chat-resume-hybrid-safe-tail` (`chat_codex_session.py`):
 
 - old history becomes chat-focused (`user`/`assistant` text)
-- keeps old-history compacted row shells by default
+- keeps old-history compacted rows only when they contain readable summary text
 - strips old-history `payload.replacement_history` by default because it is the bulky context-eating part
 - optional `--keep-compacted-anchor` keeps `replacement_history` only on the newest old-history native compacted row
 - keeps a native safe-compacted recent tail (`--safe-tail-turns`, default `1`)
@@ -297,7 +297,7 @@ Pre-boundary repair:
 Why this flow:
 
 - `chat_codex_v3.py` preserves continuity by replacing long raw history with week summaries.
-- `chat_codex_session.py` strips large native `replacement_history` blobs by default while preserving compacted row shells/messages.
+- `chat_codex_session.py` strips large native `replacement_history` blobs by default while preserving readable compacted messages.
 
 Summary policy:
 
