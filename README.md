@@ -134,6 +134,7 @@ Session markers:
 - `chat_codex_session.py`
   - recommended default for Codex live maintenance
   - Codex hybrid chat extractor for resume: chat-only old history + native safe tail
+  - keeps compacted row shells/messages while stripping bulky `replacement_history` by default
   - safe tail rows are compacted with Codex `safe` rules (tool/output trimming, reasoning cleanup)
   - supports `--latest`, `--show-summary`, and `--show-lineage`
 - `chat_codex_v3.py`
@@ -255,8 +256,9 @@ Use this order:
 `chat-resume-hybrid-safe-tail` (`chat_codex_session.py`):
 
 - old history becomes chat-focused (`user`/`assistant` text)
-- drops old-history compacted anchor rows by default
-- optional `--keep-compacted-anchor` keeps the newest old-history native compacted anchor (`type="compacted"`)
+- keeps old-history compacted row shells by default
+- strips old-history `payload.replacement_history` by default because it is the bulky context-eating part
+- optional `--keep-compacted-anchor` keeps `replacement_history` only on the newest old-history native compacted row
 - keeps a native safe-compacted recent tail (`--safe-tail-turns`, default `1`)
 - max chat message cap defaults to `--max-message-chars 8000` (to avoid truncating weekly-summary blocks)
 - drops old boundary-event spam from the historical section
@@ -295,7 +297,7 @@ Pre-boundary repair:
 Why this flow:
 
 - `chat_codex_v3.py` preserves continuity by replacing long raw history with week summaries.
-- `chat_codex_session.py` removes large native compacted anchor blobs by default because they can inflate baseline context usage.
+- `chat_codex_session.py` strips large native `replacement_history` blobs by default while preserving compacted row shells/messages.
 
 Summary policy:
 

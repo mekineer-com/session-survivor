@@ -55,7 +55,8 @@ These differences were seen in real files, but they do not break chat compaction
 
 - For normal live maintenance, keep using `chat_codex_session.py`.
 - Keep `--safe-tail-turns >= 1` (default already does this).
-- Use `--drop-compacted-anchor` only when you need extra shrink and have already validated resume behavior for that session.
+- Default `--drop-compacted-anchor` keeps compacted row shells but strips bulky `payload.replacement_history`.
+- Use `--keep-compacted-anchor` only when you specifically need the newest full native replacement-history checkpoint.
 - `--normalize-model` in `compact_codex_session.py` is optional and only for explicit model-field cleanup.
 
 ## Caveat

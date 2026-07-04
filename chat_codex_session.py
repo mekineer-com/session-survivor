@@ -78,13 +78,13 @@ def parse_args() -> argparse.Namespace:
         dest="drop_compacted_anchor",
         action="store_true",
         default=True,
-        help="Drop old-history compacted anchor rows (default).",
+        help="Strip replacement_history from old-history compacted anchor rows (default).",
     )
     anchor_group.add_argument(
         "--keep-compacted-anchor",
         dest="drop_compacted_anchor",
         action="store_false",
-        help="Keep the latest old-history compacted anchor row.",
+        help="Keep replacement_history on the latest old-history compacted anchor row.",
     )
     return parser.parse_args()
 
@@ -347,25 +347,37 @@ def apply_old_compacted_anchor_policy(
 ) -> list[dict[str, Any]]:
     """Apply compacted-anchor policy across all old-history rows."""
     last_compacted_index = None
-    if not args.drop_compacted_anchor:
-        for idx, obj in enumerate(rows):
-            if obj.get("type") == "compacted":
-                last_compacted_index = idx
+    for idx, obj in enumerate(rows):
+        if obj.get("type") == "compacted":
+            last_compacted_index = idx
 
     filtered: list[dict[str, Any]] = []
     for idx, obj in enumerate(rows):
         if obj.get("type") != "compacted":
             filtered.append(obj)
             continue
-        if args.drop_compacted_anchor:
-            state["dropped_compacted_anchor"] += 1
-            continue
         if idx == last_compacted_index:
-            filtered.append(obj)
             state["kept_compacted_anchor"] += 1
+            if args.drop_compacted_anchor:
+                filtered.append(strip_compacted_replacement_history(obj, state))
+            else:
+                filtered.append(obj)
         else:
-            state["dropped_compacted_anchor"] += 1
+            state["kept_compacted_anchor"] += 1
+            filtered.append(strip_compacted_replacement_history(obj, state))
     return filtered
+
+
+def strip_compacted_replacement_history(obj: dict[str, Any], state: dict[str, int]) -> dict[str, Any]:
+    payload = obj.get("payload")
+    if not isinstance(payload, dict) or "replacement_history" not in payload:
+        return obj
+    new_payload = dict(payload)
+    new_payload.pop("replacement_history", None)
+    new_obj = dict(obj)
+    new_obj["payload"] = new_payload
+    state["stripped_compacted_replacement_history"] += 1
+    return new_obj
 
 
 def compact_old_turn(
@@ -429,6 +441,7 @@ def main() -> int:
         "kept_header_records": 0,
         "kept_compacted_anchor": 0,
         "dropped_compacted_anchor": 0,
+        "stripped_compacted_replacement_history": 0,
         "kept_old_boundary_events": 0,
         "kept_safe_tail_turns": 0,
         "kept_safe_tail_records": 0,
@@ -522,14 +535,14 @@ def main() -> int:
         generated_at = header_rows[-1].get("timestamp")
 
     compacted_anchor_policy = (
-        "disabled(drop_compacted_anchor=true)"
+        "replacement_history_stripped(drop_compacted_anchor=true)"
         if args.drop_compacted_anchor
-        else "latest_only_for_compacted_history"
+        else "latest_replacement_history_kept_older_stripped"
     )
     old_history_output_type = (
-        "chat-compacted-history(response_item.message)"
+        "chat-compacted-history(response_item.message + compacted(shells))"
         if args.drop_compacted_anchor
-        else "chat-compacted-history(response_item.message + compacted(latest))"
+        else "chat-compacted-history(response_item.message + compacted(shells, latest full))"
     )
 
     report = {

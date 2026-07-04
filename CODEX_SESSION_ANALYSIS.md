@@ -10,6 +10,7 @@ It is written for operators using agentic CLI day to day.
 - `event_msg.payload.type == task_started` records are turn boundaries.
 - Removing all `task_started` records breaks turn parsing for compaction logic.
 - `task_complete` and `context_compacted` help continuity and should stay in native-tail workflows.
+- Preserve JSONL shape before deleting rows. For Codex `compacted` rows, prefer emptying bulky fields such as `payload.replacement_history` while keeping the row shell and `payload.message`; empty compacted rows may still be useful as timeline separators.
 
 ## Common Failure Modes (In Plain Terms)
 
@@ -22,6 +23,10 @@ It is written for operators using agentic CLI day to day.
   - internal scratch text can pollute synthetic summaries
 - Depth drift:
   - repeated compaction-on-compaction slowly degrades detail quality
+- Compacted-anchor weight:
+  - `payload.message` is readable summary text and may be useful memory
+  - `payload.replacement_history` is a bulky machine bundle and can consume too much context
+  - dropping the whole compacted row may destroy useful summaries or timeline structure
 
 ## Current Safeguards (Implemented)
 
@@ -43,7 +48,8 @@ In [chat_codex_session.py](/home/marcos/apps-codex/session-survivor/chat_codex_s
 
 - Hybrid chat resume path:
   - old history becomes chat-focused (`user`/`assistant` message text)
-  - newest old-history compacted anchor is kept
+  - compacted row handling must preserve format first: keep row shells/messages, remove heavy `replacement_history` only when shrinking anchors
+  - default anchor behavior strips `payload.replacement_history` but keeps compacted rows
   - default native tail is `1` turn (`--safe-tail-turns`)
 - Fail-loud guardrails:
   - aborts on Codex format drift
