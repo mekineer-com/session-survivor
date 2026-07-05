@@ -123,6 +123,12 @@ Plain English:
 - `compacted.payload.replacement_history` is the machine checkpoint that actually resets the model's resumed memory.
 - a compacted row without `replacement_history` is still a real Codex row shape; do not delete it just because it looks empty.
 
+Important fallback behavior:
+
+- If the newest `replacement_history` is removed, Codex is forced to rebuild from visible rows instead.
+- That can make inserted v3 summary rows visible again, because they are ordinary `response_item` messages in the surviving JSONL.
+- The next compaction then creates a fresh `replacement_history` from that rebuilt active history plus newer messages/stuff.
+
 ## Why Empty Compacted Rows Cause Walls
 
 The TUI replay path renders each context-compaction item as `Context compacted`.
