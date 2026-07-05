@@ -43,6 +43,44 @@ That means the important question for session-survivor is not "what rows look ti
 
 Only after answering that should we decide what formatting can be reduced.
 
+## Recall Path
+
+Plain English: normal Codex recall is context replay, not background search.
+
+The path is:
+
+1. Resume loads JSONL rollout rows.
+2. Codex reconstructs `ContextManager` history from those rows.
+3. Each turn clones that in-memory history.
+4. `ContextManager.for_prompt()` normalizes it into `Vec<ResponseItem>`.
+5. `Prompt.input` carries those items into the API request.
+
+Source trail:
+
+- rollout JSONL is loaded into typed `RolloutItem`s: `/home/marcos/gemini-cli/codex-upstream-latest/codex-rs/rollout/src/recorder.rs:933`
+- loaded items become `InitialHistory::Resumed`: `/home/marcos/gemini-cli/codex-upstream-latest/codex-rs/rollout/src/recorder.rs:998`
+- resume calls `apply_rollout_reconstruction()`: `/home/marcos/gemini-cli/codex-upstream-latest/codex-rs/core/src/session/mod.rs:1316`
+- reconstruction installs rebuilt history into session state: `/home/marcos/gemini-cli/codex-upstream-latest/codex-rs/core/src/session/mod.rs:1422`
+- state stores that with `replace_history()`: `/home/marcos/gemini-cli/codex-upstream-latest/codex-rs/core/src/state/session.rs:114`
+- each turn builds model input from `sess.clone_history().await.for_prompt(...)`: `/home/marcos/gemini-cli/codex-upstream-latest/codex-rs/core/src/session/turn.rs:270`
+- `clone_history()` returns the current in-memory `ContextManager`: `/home/marcos/gemini-cli/codex-upstream-latest/codex-rs/core/src/session/mod.rs:3470`
+- `ContextManager.for_prompt()` normalizes and returns its `items`: `/home/marcos/gemini-cli/codex-upstream-latest/codex-rs/core/src/context_manager/history.rs:137`
+- `Prompt.input` is the conversation context sent for a model turn: `/home/marcos/gemini-cli/codex-upstream-latest/codex-rs/core/src/client_common.rs:16`
+- request building clones `Prompt.input` for the Responses API request: `/home/marcos/gemini-cli/codex-upstream-latest/codex-rs/core/src/client.rs:822`
+- the client streams that prompt to the model: `/home/marcos/gemini-cli/codex-upstream-latest/codex-rs/core/src/session/turn.rs:1912`
+
+I found no normal-turn code path that searches old JSONL transcript text in the background and injects matches. Codex has search tools and separate memory-mode metadata, but the resume/turn path above sends reconstructed prompt context. The thread metadata records whether memory generation is enabled/disabled at thread create/resume time: `/home/marcos/gemini-cli/codex-upstream-latest/codex-rs/core/src/session/session.rs:610`.
+
+So, "what gets added to context?" means:
+
+- the reconstructed `ResponseItem` history that survived compaction/truncation
+- user input is recorded before sampling through `run_hooks_and_record_inputs()`: `/home/marcos/gemini-cli/codex-upstream-latest/codex-rs/core/src/session/turn.rs:190`
+- completed model/tool response items are recorded through `record_completed_response_item()`: `/home/marcos/gemini-cli/codex-upstream-latest/codex-rs/core/src/stream_events_utils.rs:190`
+- all those conversation items route through `record_conversation_items()`, which records into state and persists rollout response items: `/home/marcos/gemini-cli/codex-upstream-latest/codex-rs/core/src/session/mod.rs:2778`
+- `ContextManager.record_items()` filters to API-message items, applies truncation policy, and appends to history: `/home/marcos/gemini-cli/codex-upstream-latest/codex-rs/core/src/context_manager/history.rs:120`
+- model-visible world-state/context updates that are recorded into history before requests when changed: `/home/marcos/gemini-cli/codex-upstream-latest/codex-rs/core/src/session/mod.rs:2797`
+- base instructions and tool specs attached to the prompt, separate from rollout chat history: `/home/marcos/gemini-cli/codex-upstream-latest/codex-rs/core/src/session/turn.rs:1043`
+
 ## Loader Contract
 
 Codex session files are append-only JSONL rollouts. Each row is a `RolloutItem` with top-level `type` and `payload`.
