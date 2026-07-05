@@ -5,12 +5,14 @@
 This file explains what usually goes wrong in long Codex sessions and which protections are already implemented in `session-survivor`.
 It is written for operators using agentic CLI day to day.
 
+For the source-code-level loader contract, read `CODEX_CLI_SESSION_MEMORY.md`.
+
 ## One Rule You Must Not Break
 
 - `event_msg.payload.type == task_started` records are turn boundaries.
 - Removing all `task_started` records breaks turn parsing for compaction logic.
 - `task_complete` and `context_compacted` help continuity and should stay in native-tail workflows.
-- Preserve JSONL shape before deleting rows. For Codex `compacted` rows, keep readable `payload.message` summaries and strip bulky `payload.replacement_history`; do not mine or preserve empty compacted shells just as timeline separators.
+- Preserve JSONL shape before deleting rows. For Codex `compacted` rows, keep original row placement when a clean source exists, keep readable `payload.message` summaries, and strip bulky `payload.replacement_history`; do not mine extra empty compacted shells from backups just as timeline separators.
 
 ## Common Failure Modes (In Plain Terms)
 
@@ -26,7 +28,8 @@ It is written for operators using agentic CLI day to day.
 - Compacted-anchor weight:
   - `payload.message` is readable summary text and may be useful memory
   - `payload.replacement_history` is a bulky machine bundle and can consume too much context
-  - dropping compacted rows with readable summaries may destroy useful memory; empty shells are not worth keeping in chat output
+  - dropping compacted rows with readable summaries may destroy useful memory
+  - empty compacted shells should not be invented or multiplied; preserve clean original placement unless they are proven repair artifacts
 
 ## Current Safeguards (Implemented)
 
@@ -49,7 +52,7 @@ In [chat_codex_session.py](/home/marcos/apps-codex/session-survivor/chat_codex_s
 - Hybrid chat resume path:
   - old history becomes chat-focused (`user`/`assistant` message text)
   - compacted row handling must preserve useful summaries first: keep non-empty row messages, remove heavy `replacement_history`
-  - default anchor behavior strips `payload.replacement_history` and drops empty compacted shells
+  - default anchor behavior strips `payload.replacement_history` and avoids duplicated/flooded empty compacted shells
   - default native tail is `1` turn (`--safe-tail-turns`)
 - Fail-loud guardrails:
   - aborts on Codex format drift
