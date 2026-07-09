@@ -72,20 +72,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print lineage/provenance information for the input session and exit.",
     )
-    anchor_group = parser.add_mutually_exclusive_group()
-    anchor_group.add_argument(
-        "--drop-compacted-anchor",
-        dest="drop_compacted_anchor",
-        action="store_true",
-        default=True,
-        help="Strip replacement_history from old-history compacted anchor rows (default).",
-    )
-    anchor_group.add_argument(
-        "--keep-compacted-anchor",
-        dest="drop_compacted_anchor",
-        action="store_false",
-        help="Keep replacement_history on the latest old-history compacted anchor row.",
-    )
     return parser.parse_args()
 
 
@@ -357,11 +343,8 @@ def apply_old_compacted_anchor_policy(
             filtered.append(obj)
             continue
         if idx == last_compacted_index:
-            if args.drop_compacted_anchor:
-                append_compacted_anchor(filtered, strip_compacted_replacement_history(obj, state), state)
-            else:
-                filtered.append(obj)
-                state["kept_compacted_anchor"] += 1
+            filtered.append(obj)
+            state["kept_compacted_anchor"] += 1
         else:
             append_compacted_anchor(filtered, strip_compacted_replacement_history(obj, state), state)
     return filtered
@@ -548,16 +531,8 @@ def main() -> int:
     elif header_rows:
         generated_at = header_rows[-1].get("timestamp")
 
-    compacted_anchor_policy = (
-        "replacement_history_stripped(drop_compacted_anchor=true)"
-        if args.drop_compacted_anchor
-        else "latest_replacement_history_kept_older_stripped"
-    )
-    old_history_output_type = (
-        "chat-compacted-history(response_item.message + compacted(nonempty messages))"
-        if args.drop_compacted_anchor
-        else "chat-compacted-history(response_item.message + compacted(shells, latest full))"
-    )
+    compacted_anchor_policy = "latest_replacement_history_kept_older_stripped"
+    old_history_output_type = "chat-compacted-history(response_item.message + compacted(shells, latest full))"
 
     report = {
         "source": str(source),
@@ -612,7 +587,6 @@ def main() -> int:
     manifest["policy"]["safe_tail_turns"] = args.safe_tail_turns
     manifest["policy"]["max_tool_input_chars"] = args.max_tool_input_chars
     manifest["policy"]["max_reasoning_chars"] = args.max_reasoning_chars
-    manifest["policy"]["drop_compacted_anchor"] = args.drop_compacted_anchor
     manifest["policy"]["kept_roles"] = ["user", "assistant"]
     manifest["policy"]["kept_compacted_anchor"] = compacted_anchor_policy
     manifest["policy"]["chat_history_kept_boundary_event_types"] = ["task_started", "task_complete"]

@@ -256,9 +256,9 @@ Use this order:
 `chat-resume-hybrid-safe-tail` (`chat_codex_session.py`):
 
 - old history becomes chat-focused (`user`/`assistant` text)
-- keeps old-history compacted rows only when they contain readable summary text
-- strips old-history `payload.replacement_history` by default because it is the bulky context-eating part
-- optional `--keep-compacted-anchor` keeps `replacement_history` only on the newest old-history native compacted row
+- keeps old-history compacted rows with readable summary text
+- keeps the newest old-history native `replacement_history` checkpoint by default
+- strips older old-history `payload.replacement_history` because it is superseded bulk
 - keeps a native safe-compacted recent tail (`--safe-tail-turns`, default `1`)
 - max chat message cap defaults to `--max-message-chars 8000` (to avoid truncating weekly-summary blocks)
 - drops old boundary-event spam from the historical section
@@ -270,7 +270,6 @@ Use this order:
   - `python3 chat_codex_session.py --latest --show-summary`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl --max-message-chars 8000`
-  - `python3 chat_codex_session.py /path/to/rollout.jsonl --keep-compacted-anchor`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl --safe-tail-turns 8`
 
 Pre-boundary repair:
@@ -297,7 +296,7 @@ Pre-boundary repair:
 Why this flow:
 
 - `chat_codex_v3.py` preserves continuity by replacing long raw history with week summaries.
-- `chat_codex_session.py` strips large native `replacement_history` blobs by default while preserving readable compacted messages.
+- `chat_codex_session.py` keeps the newest native `replacement_history` checkpoint, strips older checkpoint bulk, and preserves readable compacted messages.
 
 Summary policy:
 

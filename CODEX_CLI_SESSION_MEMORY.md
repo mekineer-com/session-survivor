@@ -176,7 +176,8 @@ Default should stay:
 - old history becomes compact chat-focused rows
 - recent native tail stays native
 - readable compacted summaries stay
-- `replacement_history` is stripped from old compacted rows
+- the newest native `replacement_history` checkpoint stays
+- older `replacement_history` bulk is stripped
 - compacted rows from clean structure are preserved unless proven to be duplicated flood artifacts
 - `safe_tail_turns=1`
 
