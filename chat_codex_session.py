@@ -9,7 +9,7 @@ import pathlib
 import sys
 from typing import Any
 
-from compact_codex_session import compact_record, core_format_warnings
+from compact_codex_session import MAX_COMPACTED_REPLACEMENT_HISTORY, compact_record, core_format_warnings
 from lineage import build_compaction_manifest, describe_lineage
 
 
@@ -580,7 +580,7 @@ def main() -> int:
         compacted_lines=compacted_validation["line_count"],
         bytes_saved=len(original_bytes) - len(compacted_bytes),
         keep_last_turns=0,
-        max_replacement_records=0,
+        max_replacement_records=MAX_COMPACTED_REPLACEMENT_HISTORY,
     )
     manifest.setdefault("policy", {})
     manifest["policy"]["max_message_chars"] = args.max_message_chars
@@ -589,6 +589,7 @@ def main() -> int:
     manifest["policy"]["max_reasoning_chars"] = args.max_reasoning_chars
     manifest["policy"]["kept_roles"] = ["user", "assistant"]
     manifest["policy"]["kept_compacted_anchor"] = compacted_anchor_policy
+    manifest["policy"]["compacted_replacement_history"] = "latest_native_checkpoint_kept_older_stripped"
     manifest["policy"]["chat_history_kept_boundary_event_types"] = ["task_started", "task_complete"]
     manifest["policy"]["chat_history_dropped_event_types"] = ["turn_aborted"]
     manifest["policy"]["safe_tail_kept_record_types"] = ["event_msg", "response_item", "turn_context", "compacted"]

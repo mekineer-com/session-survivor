@@ -701,12 +701,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             compacted_lines=compacted_validation["line_count"],
             bytes_saved=len(original_bytes) - len(compacted_bytes),
             keep_last_turns=args.safe_tail_turns,
-            max_replacement_records=3,
+            max_replacement_records=0,
         )
         manifest.setdefault("policy", {})
         manifest["policy"]["summary_file"] = str(summary_file)
         manifest["policy"]["safe_tail_turns"] = args.safe_tail_turns
         manifest["policy"]["synthetic_week_turn_rows"] = 3
+        manifest["policy"]["compacted_replacement_history"] = "stripped_to_activate_visible_weekly_summaries"
         manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         manifest_path_value = str(manifest_path)
     report["manifest_path"] = manifest_path_value
