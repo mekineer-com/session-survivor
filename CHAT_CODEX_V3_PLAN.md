@@ -45,12 +45,14 @@ Build `chat_codex_v3.py` that consumes `WEEKLY_SUMMARIES.md` directly and prepar
     - `event_msg` `task_started`
     - `response_item` assistant message (weekly summary markdown)
     - `event_msg` `task_complete`
-4. Keep recent safe tail turns untouched (configurable, default `1`).
+4. Keep recent safe tail turns structurally native (configurable, default `1`).
+5. Strip `compacted.payload.replacement_history` from the whole v3 output so Codex rebuilds from the visible weekly summaries.
 
 ## Safety/Validation
 - Validate JSON decode on all output lines.
 - Preserve chronological order.
 - Ensure each inserted summary turn has start/complete boundaries.
+- Preserve compacted row shells/messages while removing only `replacement_history`.
 - Refuse write if no weeks parsed or no turns matched (unless `--force-empty-map`).
 
 ## CLI Design (initial)

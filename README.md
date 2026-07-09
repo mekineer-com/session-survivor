@@ -134,13 +134,13 @@ Session markers:
 - `chat_codex_session.py`
   - recommended default for Codex live maintenance
   - Codex hybrid chat extractor for resume: chat-only old history + native safe tail
-  - keeps compacted row shells/messages while stripping bulky `replacement_history` by default
+  - keeps the newest compacted `replacement_history` checkpoint and strips older checkpoint bulk
   - safe tail rows are compacted with Codex `safe` rules (tool/output trimming, reasoning cleanup)
   - supports `--latest`, `--show-summary`, and `--show-lineage`
 - `chat_codex_v3.py`
   - weekly-summary-driven Codex continuity rewrite (consumes LLM-authored summaries)
   - parses `WEEKLY_SUMMARIES.md` and replaces matched old turn ranges with one synthetic weekly summary turn
-  - keeps newest `--safe-tail-turns` turns fully unchanged
+  - keeps newest `--safe-tail-turns` turns, except compacted `replacement_history` is stripped so weekly summaries become visible on resume
   - writes candidate output only (no live swap automation)
   - supports `--latest`, `--summary-file`, `--dry-run-only`, `--show-summary`, and `--show-lineage`
 - `compact_claude_session.py`
@@ -296,6 +296,7 @@ Pre-boundary repair:
 Why this flow:
 
 - `chat_codex_v3.py` preserves continuity by replacing long raw history with week summaries.
+- `chat_codex_v3.py` strips compacted `replacement_history` so Codex rebuilds memory from the inserted summaries; the next native compact creates a fresh checkpoint.
 - `chat_codex_session.py` keeps the newest native `replacement_history` checkpoint, strips older checkpoint bulk, and preserves readable compacted messages.
 
 Summary policy:

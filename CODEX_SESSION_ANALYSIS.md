@@ -51,8 +51,8 @@ In [chat_codex_session.py](/home/marcos/apps-codex/session-survivor/chat_codex_s
 
 - Hybrid chat resume path:
   - old history becomes chat-focused (`user`/`assistant` message text)
-  - compacted row handling must preserve useful summaries first: keep non-empty row messages, remove heavy `replacement_history`
-  - default anchor behavior strips `payload.replacement_history` and avoids duplicated/flooded empty compacted shells
+  - compacted row handling keeps the newest native `replacement_history` checkpoint, preserves readable summaries, and strips older checkpoint bulk
+  - default anchor behavior avoids duplicated/flooded empty compacted shells
   - default native tail is `1` turn (`--safe-tail-turns`)
 - Fail-loud guardrails:
   - aborts on Codex format drift
@@ -61,6 +61,13 @@ In [chat_codex_session.py](/home/marcos/apps-codex/session-survivor/chat_codex_s
 In [fix-codex-session.py](/home/marcos/apps-codex/session-survivor/fix-codex-session.py):
 
 - targeted replacement-history scrub helpers for contamination not covered by `--normalize-model`.
+
+In [chat_codex_v3.py](/home/marcos/apps-codex/session-survivor/chat_codex_v3.py):
+
+- Weekly-summary activation path:
+  - replaces matched old turn ranges with LLM-authored weekly summaries
+  - strips all compacted `replacement_history` fields so Codex rebuilds from visible summary rows
+  - keeps compacted row shells/messages and lets the next native compact create a fresh checkpoint
 
 ## Operator Guidance
 

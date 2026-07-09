@@ -45,7 +45,7 @@ What it does:
 
 - keeps old chat text (`user` and `assistant`)
 - keeps old-history compacted row shells/messages
-- strips old-history `replacement_history` by default
+- keeps the newest old-history `replacement_history` checkpoint and strips older checkpoint bulk
 - drops old boundary-event spam from old history
 - keeps a native safe-compacted tail (`--safe-tail-turns`, default `1`)
 
@@ -100,7 +100,7 @@ For `chat-resume-hybrid-safe-tail`:
 
 1. `changes.kept_safe_tail_turns` is expected
 2. `changes.kept_compacted_anchor` preserves readable compacted summaries
-3. `changes.stripped_compacted_replacement_history` shows bulky anchor fillings were removed
+3. `changes.stripped_compacted_replacement_history` shows superseded anchor fillings were removed
 4. `policy.chat_history_dropped_event_types` matches expected dropped old events
 
 ## Manual Swap and Rollback

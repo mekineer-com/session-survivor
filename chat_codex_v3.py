@@ -96,7 +96,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Rewrite Codex old-history turns into weekly summary turns using "
-            "WEEKLY_SUMMARIES.md while keeping a native safe tail untouched."
+            "WEEKLY_SUMMARIES.md while keeping a structurally native safe tail."
         )
     )
     parser.add_argument("session", nargs="?", help="Path to Codex rollout JSONL.")
@@ -457,6 +457,26 @@ def build_synthetic_week_turn(
     ]
 
 
+def strip_compacted_replacement_history(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    stripped: list[dict[str, Any]] = []
+    count = 0
+    for row in rows:
+        if row.get("type") != "compacted":
+            stripped.append(row)
+            continue
+        payload = row.get("payload")
+        if not isinstance(payload, dict) or "replacement_history" not in payload:
+            stripped.append(row)
+            continue
+        new_payload = dict(payload)
+        new_payload.pop("replacement_history", None)
+        new_row = dict(row)
+        new_row["payload"] = new_payload
+        stripped.append(new_row)
+        count += 1
+    return stripped, count
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.safe_tail_turns < 1:
         raise SystemExit("safe-tail-turns must be >= 1.")
@@ -594,6 +614,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     tail_rows = [row for turn in tail_turns for row in turn]
     out_rows = [*rebuilt_old_rows, *tail_rows]
+    out_rows, stripped_replacement_history = strip_compacted_replacement_history(out_rows)
     if not out_rows:
         raise SystemExit("Refusing to write empty output.")
 
@@ -641,6 +662,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "kept_header_records": sum(1 for u in old_units if not u.matchable),
             "kept_safe_tail_records": len(tail_rows),
             "rebuilt_old_records": len(rebuilt_old_rows),
+            "stripped_compacted_replacement_history": stripped_replacement_history,
         },
         "week_matches": week_matches,
         "warnings": [],
@@ -649,6 +671,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "safe_tail_turns": args.safe_tail_turns,
             "dry_run_only": bool(args.dry_run_only),
             "summary_format": "weekly-markdown-verbatim",
+            "compacted_replacement_history": "stripped_to_activate_visible_weekly_summaries",
             "synthetic_turn_shape": [
                 "event_msg.task_started",
                 "response_item.message(role=assistant)",
