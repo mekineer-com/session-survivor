@@ -15,6 +15,9 @@ Prepare Codex conversation history as ordered source files that Sonnet can read 
 3. Split output into one markdown file per UTC day, in strict chronological order.
 4. Write an index file with file order, counts, and date ranges.
 5. Use these files as input for Sonnet-generated weekly summaries.
+6. For continuation batches, give Sonnet the old `WEEKLY_SUMMARIES.md` as style reference and ask for one `## Week of ...` block per new week.
+7. If all new weekly sources are too large for one prompt, keep the same Sonnet model/version and summarize one week per call with the same style packet.
+8. Combine old and new blocks into `WEEKLY_SUMMARIES_EXTENDED.md`; do not add `[Codex]` manually because `chat_codex_v3.py` adds that prefix during insertion.
 
 ## Non-goals in this step
 - No edits to live session files.

@@ -119,8 +119,10 @@ If no `replacement_history` is found:
 
 Plain English:
 
-- `compacted.payload.message` is readable summary text.
+- `compacted.payload.message` may contain readable summary text; observed 5.6 remote compactions leave it empty and keep summary state in an encrypted compaction item.
 - `compacted.payload.replacement_history` is the machine checkpoint that actually resets the model's resumed memory.
+- native Codex compaction can store readable user messages inside `replacement_history`; assistant history may be represented only by a compaction/summary item, which can be encrypted or otherwise not human-readable. This follows `collect_user_messages()` and `build_compacted_history()` in `codex-rs/core/src/compact.rs`.
+- session-survivor weekly summaries are intentionally written as `[Codex]` user-message rows so native Codex compaction carries them forward as readable continuity memory.
 - a compacted row without `replacement_history` is still a real Codex row shape; do not delete it just because it looks empty.
 
 Important fallback behavior:
@@ -176,7 +178,7 @@ Default should stay:
 - old history becomes compact chat-focused rows
 - recent native tail stays native
 - readable compacted summaries stay
-- the newest native `replacement_history` checkpoint stays
+- the newest native compacted checkpoint row stays, but `replacement_history` user-message bulk is pruned
 - older `replacement_history` bulk is stripped
 - compacted rows from clean structure are preserved unless proven to be duplicated flood artifacts
 - `safe_tail_turns=1`

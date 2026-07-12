@@ -6,6 +6,7 @@ This file explains what usually goes wrong in long Codex sessions and which prot
 It is written for operators using agentic CLI day to day.
 
 For the source-code-level loader contract, read `CODEX_CLI_SESSION_MEMORY.md`.
+For model-specific JSONL differences, read `CODEX_MODEL_JSONL_COMPAT.md`.
 
 ## One Rule You Must Not Break
 
@@ -26,7 +27,7 @@ For the source-code-level loader contract, read `CODEX_CLI_SESSION_MEMORY.md`.
 - Depth drift:
   - repeated compaction-on-compaction slowly degrades detail quality
 - Compacted-anchor weight:
-  - `payload.message` is readable summary text and may be useful memory
+  - non-empty `payload.message` may contain readable summary text; observed 5.6 remote compactions leave it empty
   - `payload.replacement_history` is a bulky machine bundle and can consume too much context
   - dropping compacted rows with readable summaries may destroy useful memory
   - empty compacted shells should not be invented or multiplied; preserve clean original placement unless they are proven repair artifacts
@@ -51,7 +52,7 @@ In [chat_codex_session.py](/home/marcos/apps-codex/session-survivor/chat_codex_s
 
 - Hybrid chat resume path:
   - old history becomes chat-focused (`user`/`assistant` message text)
-  - compacted row handling keeps the newest native `replacement_history` checkpoint, preserves readable summaries, and strips older checkpoint bulk
+  - compacted row handling keeps the newest checkpoint row, preserves continuity-summary user messages, keeps the 50 newest ordinary user messages in its `replacement_history`, and strips older checkpoint bulk
   - default anchor behavior avoids duplicated/flooded empty compacted shells
   - default native tail is `1` turn (`--safe-tail-turns`)
 - Fail-loud guardrails:

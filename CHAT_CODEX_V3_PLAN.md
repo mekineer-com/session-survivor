@@ -43,7 +43,7 @@ Build `chat_codex_v3.py` that consumes `WEEKLY_SUMMARIES.md` directly and prepar
   - remove those turns from old-history region
   - insert one synthetic summary turn:
     - `event_msg` `task_started`
-    - `response_item` assistant message (weekly summary markdown)
+    - `response_item` user message containing `[Codex]` + weekly summary markdown
     - `event_msg` `task_complete`
 4. Keep recent safe tail turns structurally native (configurable, default `1`).
 5. Strip `compacted.payload.replacement_history` from the whole v3 output so Codex rebuilds from the visible weekly summaries.
@@ -71,3 +71,9 @@ Build `chat_codex_v3.py` that consumes `WEEKLY_SUMMARIES.md` directly and prepar
 4. Run on Codex file in dry-run.
 5. Inspect report and sample week replacements.
 6. Stop for user approval before any swap.
+
+## Current Nuance
+- Native Codex compaction carries readable user messages forward inside `replacement_history`, while assistant history can disappear into an encrypted/non-readable compaction item.
+- v3 summaries are therefore inserted as `[Codex]` user-message rows, not assistant rows.
+- `chat_codex_session.py` protects `[Codex]` weekly summaries and prunes ordinary old user-message bulk from `replacement_history`, keeping the newest checkpoint shape plus the last 50 ordinary user messages by default.
+- For new summary batches, prefer one Sonnet version for consistency. If one prompt is too large, use the same Sonnet version and old-summary style reference for each weekly call.

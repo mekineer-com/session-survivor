@@ -18,6 +18,7 @@ DEFAULT_OUTPUT_ROOT = pathlib.Path("/home/marcos/apps-codex/session-survivor/out
 PLACEHOLDER = "[Compacted Codex chat message"
 MAX_PRE_BOUNDARY_HEADER_BYTES = 512_000
 MAX_PRE_BOUNDARY_HEADER_RECORDS = 128
+DEFAULT_REPLACEMENT_HISTORY_USER_MESSAGES = 50
 
 
 def parse_args() -> argparse.Namespace:
@@ -41,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-message-chars",
         type=int,
-        default=8000,
+        default=20000,
         help="Keep at most this many chars per chat message.",
     )
     parser.add_argument(
@@ -61,6 +62,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=240,
         help="Keep at most this many chars of agent reasoning text in safe tail.",
+    )
+    parser.add_argument(
+        "--keep-replacement-history-user-messages",
+        type=int,
+        default=DEFAULT_REPLACEMENT_HISTORY_USER_MESSAGES,
+        help="Keep this many newest non-summary user messages inside compacted replacement_history.",
     )
     parser.add_argument(
         "--show-summary",
@@ -176,6 +183,66 @@ def extract_message_text(content: Any) -> str:
         if text:
             chunks.append(text)
     return "\n\n".join(chunks).strip()
+
+
+def is_continuity_summary_text(text: str) -> bool:
+    text = text.lstrip()
+    if text.startswith("[Codex]"):
+        text = text[len("[Codex]") :].lstrip()
+    return text.startswith("## Week of ")
+
+
+def prune_compacted_replacement_history(
+    obj: dict[str, Any],
+    args: argparse.Namespace,
+    state: dict[str, int],
+) -> dict[str, Any]:
+    payload = obj.get("payload")
+    if not isinstance(payload, dict):
+        return obj
+    history = payload.get("replacement_history")
+    if not isinstance(history, list):
+        return obj
+
+    ordinary_user_indices: list[int] = []
+    summary_user_indices: set[int] = set()
+    for idx, item in enumerate(history):
+        if not isinstance(item, dict) or item.get("type") != "message" or item.get("role") != "user":
+            continue
+        if is_continuity_summary_text(extract_message_text(item.get("content"))):
+            summary_user_indices.add(idx)
+        else:
+            ordinary_user_indices.append(idx)
+
+    keep_count = max(0, args.keep_replacement_history_user_messages)
+    recent_user_indices = set(ordinary_user_indices[-keep_count:]) if keep_count else set()
+    new_history: list[Any] = []
+    pruned = kept_summary = kept_recent = kept_other = 0
+    for idx, item in enumerate(history):
+        is_user = isinstance(item, dict) and item.get("type") == "message" and item.get("role") == "user"
+        if not is_user:
+            new_history.append(item)
+            kept_other += 1
+        elif idx in summary_user_indices:
+            new_history.append(item)
+            kept_summary += 1
+        elif idx in recent_user_indices:
+            new_history.append(item)
+            kept_recent += 1
+        else:
+            pruned += 1
+
+    state["pruned_replacement_history_user_messages"] += pruned
+    state["kept_replacement_history_summary_user_messages"] += kept_summary
+    state["kept_replacement_history_recent_user_messages"] += kept_recent
+    state["kept_replacement_history_other_items"] += kept_other
+    if not pruned:
+        return obj
+    new_payload = dict(payload)
+    new_payload["replacement_history"] = new_history
+    new_obj = dict(obj)
+    new_obj["payload"] = new_payload
+    return new_obj
 
 
 def turn_boundary_type(obj: dict[str, Any]) -> str:
@@ -343,7 +410,7 @@ def apply_old_compacted_anchor_policy(
             filtered.append(obj)
             continue
         if idx == last_compacted_index:
-            filtered.append(obj)
+            filtered.append(prune_compacted_replacement_history(obj, args, state))
             state["kept_compacted_anchor"] += 1
         else:
             append_compacted_anchor(filtered, strip_compacted_replacement_history(obj, state), state)
@@ -459,6 +526,10 @@ def main() -> int:
         "safe_tail_agent_reasoning_truncated": 0,
         "safe_tail_duplicated_instruction_messages": 0,
         "safe_tail_scratch_artifacts_removed": 0,
+        "pruned_replacement_history_user_messages": 0,
+        "kept_replacement_history_summary_user_messages": 0,
+        "kept_replacement_history_recent_user_messages": 0,
+        "kept_replacement_history_other_items": 0,
     }
 
     format_warnings = core_format_warnings(records)
@@ -501,7 +572,10 @@ def main() -> int:
     safe_tail_rows: list[dict[str, Any]] = []
     for turn in tail_turns:
         for obj in turn:
-            safe_tail_rows.append(compact_record(obj, args, safe_tail_state))
+            row = compact_record(obj, args, safe_tail_state)
+            if row.get("type") == "compacted":
+                row = prune_compacted_replacement_history(row, args, state)
+            safe_tail_rows.append(row)
 
     state["kept_safe_tail_records"] = len(safe_tail_rows)
     state["safe_tail_reasoning_encrypted_removed"] = safe_tail_state["reasoning_encrypted_removed"]
@@ -531,8 +605,8 @@ def main() -> int:
     elif header_rows:
         generated_at = header_rows[-1].get("timestamp")
 
-    compacted_anchor_policy = "latest_replacement_history_kept_older_stripped"
-    old_history_output_type = "chat-compacted-history(response_item.message + compacted(shells, latest full))"
+    compacted_anchor_policy = "latest_replacement_history_pruned_older_stripped"
+    old_history_output_type = "chat-compacted-history(response_item.message + compacted(shells, latest pruned))"
 
     report = {
         "source": str(source),
@@ -554,11 +628,12 @@ def main() -> int:
             "safe_tail_turns": args.safe_tail_turns,
             "max_tool_input_chars": args.max_tool_input_chars,
             "max_reasoning_chars": args.max_reasoning_chars,
+            "keep_replacement_history_user_messages": args.keep_replacement_history_user_messages,
             "kept_roles": ["user", "assistant"],
             "kept_compacted_anchor": compacted_anchor_policy,
             "chat_history_kept_boundary_event_types": ["task_started", "task_complete"],
             "chat_history_dropped_event_types": ["turn_aborted"],
-            "safe_tail_kept_record_types": ["event_msg", "response_item", "turn_context", "compacted"],
+            "safe_tail_kept_record_types": ["event_msg", "response_item", "turn_context", "world_state", "compacted"],
             "output_record_types": [
                 "session_meta/header",
                 old_history_output_type,
@@ -587,12 +662,19 @@ def main() -> int:
     manifest["policy"]["safe_tail_turns"] = args.safe_tail_turns
     manifest["policy"]["max_tool_input_chars"] = args.max_tool_input_chars
     manifest["policy"]["max_reasoning_chars"] = args.max_reasoning_chars
+    manifest["policy"]["keep_replacement_history_user_messages"] = args.keep_replacement_history_user_messages
     manifest["policy"]["kept_roles"] = ["user", "assistant"]
     manifest["policy"]["kept_compacted_anchor"] = compacted_anchor_policy
-    manifest["policy"]["compacted_replacement_history"] = "latest_native_checkpoint_kept_older_stripped"
+    manifest["policy"]["compacted_replacement_history"] = "latest_native_checkpoint_pruned_older_stripped"
     manifest["policy"]["chat_history_kept_boundary_event_types"] = ["task_started", "task_complete"]
     manifest["policy"]["chat_history_dropped_event_types"] = ["turn_aborted"]
-    manifest["policy"]["safe_tail_kept_record_types"] = ["event_msg", "response_item", "turn_context", "compacted"]
+    manifest["policy"]["safe_tail_kept_record_types"] = [
+        "event_msg",
+        "response_item",
+        "turn_context",
+        "world_state",
+        "compacted",
+    ]
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 

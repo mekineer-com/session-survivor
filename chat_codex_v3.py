@@ -415,7 +415,7 @@ def build_synthetic_week_turn(
     started_at = int(start_dt.timestamp())
     completed_at = int(end_dt.timestamp())
     duration_ms = max(0, int((end_dt - start_dt).total_seconds() * 1000))
-    summary_markdown = week.as_markdown()
+    summary_markdown = f"[Codex]\n\n{week.as_markdown()}"
     completion_preview = f"Inserted weekly continuity summary for {week.heading[3:]}."
 
     started_payload: dict[str, Any] = {
@@ -438,9 +438,8 @@ def build_synthetic_week_turn(
             "type": "response_item",
             "payload": {
                 "type": "message",
-                "role": "assistant",
-                "phase": "final_answer",
-                "content": [{"type": "output_text", "text": summary_markdown}],
+                "role": "user",
+                "content": [{"type": "input_text", "text": summary_markdown}],
             },
         },
         {
@@ -674,7 +673,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "compacted_replacement_history": "stripped_to_activate_visible_weekly_summaries",
             "synthetic_turn_shape": [
                 "event_msg.task_started",
-                "response_item.message(role=assistant)",
+                "response_item.message(role=user, weekly continuity summary)",
                 "event_msg.task_complete",
             ],
         },

@@ -45,7 +45,7 @@ What it does:
 
 - keeps old chat text (`user` and `assistant`)
 - keeps old-history compacted row shells/messages
-- keeps the newest old-history `replacement_history` checkpoint and strips older checkpoint bulk
+- keeps the newest old-history checkpoint row, prunes its ordinary user-message bulk, and strips older checkpoint bulk
 - drops old boundary-event spam from old history
 - keeps a native safe-compacted tail (`--safe-tail-turns`, default `1`)
 
