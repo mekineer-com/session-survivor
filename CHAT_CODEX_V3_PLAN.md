@@ -76,4 +76,10 @@ Build `chat_codex_v3.py` that consumes `WEEKLY_SUMMARIES.md` directly and prepar
 - Native Codex compaction carries readable user messages forward inside `replacement_history`, while assistant history can disappear into an encrypted/non-readable compaction item.
 - v3 summaries are therefore inserted as `[Codex]` user-message rows, not assistant rows.
 - `chat_codex_session.py` protects `[Codex]` weekly summaries and prunes ordinary old user-message bulk from `replacement_history`, keeping the newest checkpoint shape plus the last 50 ordinary user messages by default.
-- For new summary batches, prefer one Sonnet version for consistency. If one prompt is too large, use the same Sonnet version and old-summary style reference for each weekly call.
+- For new summary batches, use one Grok session/model for consistency. If one prompt is too large, resume the same Grok session with the same style reference.
+
+## Next Run: Aster
+- Work from a frozen copy made after Aster exits; never rewrite the live session.
+- Let Grok preserve personality, relationship context, decisions, and conversational voice while dropping repetitive tool narration.
+- Apply human-like fading detail: one compact ancient-history summary, monthly middle-history summaries, and weekly recent summaries.
+- Audit the summary prose and transformed JSONL before any live swap.
