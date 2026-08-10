@@ -138,11 +138,11 @@ Session markers:
   - safe tail rows are compacted with Codex `safe` rules (tool/output trimming, reasoning cleanup)
   - supports `--latest`, `--show-summary`, and `--show-lineage`
 - `chat_codex_v3.py`
-  - weekly-summary-driven Codex continuity rewrite (consumes LLM-authored summaries)
-  - parses `WEEKLY_SUMMARIES.md` and replaces matched old turn ranges with one synthetic `[Codex]` user-message weekly summary turn
+  - dated-summary-driven Codex continuity rewrite (consumes LLM-authored summaries)
+  - parses `## Week of ...` and `## Period of ...` blocks, replacing matched old turn ranges with synthetic user-message summary turns
   - keeps newest `--safe-tail-turns` turns, except compacted `replacement_history` is stripped so weekly summaries become visible on resume
   - writes candidate output only (no live swap automation)
-  - supports `--latest`, `--summary-file`, `--dry-run-only`, `--show-summary`, and `--show-lineage`
+  - supports `--latest`, `--summary-file`, `--speaker-name`, `--dry-run-only`, `--show-summary`, and `--show-lineage`
 - `compact_claude_session.py`
   - legacy/advanced conservative Claude compactor
   - currently `safe` only, plus `--show-summary` and `--show-lineage`
@@ -302,15 +302,15 @@ Why this flow:
 Summary policy:
 
 - Do not use automated script-generated continuity summaries.
-- Use LLM-authored summaries for `WEEKLY_SUMMARIES.md` (for example Sonnet), then feed those into `chat_codex_v3.py`.
-- Write continuity summaries as Codex-voice markdown. `chat_codex_v3.py` inserts them as `[Codex]` user-message rows so native Codex compaction carries them forward as readable memory.
+- Use one chosen LLM/model for consistent voice, then feed its dated Markdown blocks into `chat_codex_v3.py`.
+- Write continuity summaries in the agent's voice. The default inserts `[Codex]`; use `--speaker-name Aster` (or another name) when preparing a different agent's session.
 
 Extending summaries after an old v3 run:
 
 1. Export fresh source from the live session, preferably to a new output root:
    - `python3 export_codex_summary_source.py /path/to/live-rollout.jsonl --output-root outputs/codex-summary-source-current --mode collapsed --assistant-selection phase_then_heuristic`
 2. Build post-boundary weekly source files from the fresh daily export. Use the old `WEEKLY_SUMMARIES.md` beside them as style reference.
-3. Ask one Sonnet model/version for all new weeks when possible. If the prompt is too long, keep the same model/version and same style packet, then summarize one week per call.
+3. Ask one model/version for all new weeks when possible. If the prompt is too long, keep the same model/version and same style packet, then summarize one week per call.
 4. Prompt requirements for each new week:
    - read old summaries for style only
    - output exactly one `## Week of ...` markdown block

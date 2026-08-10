@@ -37,9 +37,9 @@ MONTHS = {
     "Nov": 11,
     "Dec": 12,
 }
-WEEK_HEADER_RE = re.compile(r"^##\s+Week of\s+(.+?)\s*$")
+SUMMARY_HEADER_RE = re.compile(r"^##\s+(?:Week|Period) of\s+(.+?)\s*$")
 WEEK_RANGE_RE = re.compile(
-    r"^\s*([A-Za-z]{3})\s+(\d{1,2})\s*[–-]\s*(?:([A-Za-z]{3})\s+)?(\d{1,2})(?:,\s*(\d{4}))?\s*$"
+    r"^\s*([A-Za-z]{3})\s+(\d{1,2})(?:\s*[–-]\s*(?:([A-Za-z]{3})\s+)?(\d{1,2}))?(?:,\s*(\d{4}))?\s*$"
 )
 
 
@@ -108,6 +108,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--summary-file",
         help="Path to WEEKLY_SUMMARIES.md. If omitted, infer from outputs/codex-summary-source.",
+    )
+    parser.add_argument(
+        "--speaker-name",
+        default="Codex",
+        help="Name prefixed to inserted continuity summaries (default: Codex).",
     )
     parser.add_argument(
         "--output-root",
@@ -337,7 +342,7 @@ def parse_week_range(raw: str, current_year: int, previous_start: date | None) -
     month1 = MONTHS[m1_name]
     day1 = int(d1_raw)
     month2 = MONTHS[m2_name] if m2_name else month1
-    day2 = int(d2_raw)
+    day2 = int(d2_raw) if d2_raw else day1
 
     year = int(year_raw) if year_raw else current_year
     start = date(year, month1, day1)
@@ -362,7 +367,7 @@ def parse_weekly_summaries(summary_text: str, anchor_year: int) -> list[WeekBloc
     current_lines: list[str] = []
 
     for line in lines:
-        m = WEEK_HEADER_RE.match(line)
+        m = SUMMARY_HEADER_RE.match(line)
         if m:
             if current_heading is not None:
                 blocks.append((current_heading, current_lines))
@@ -378,7 +383,7 @@ def parse_weekly_summaries(summary_text: str, anchor_year: int) -> list[WeekBloc
     current_year = anchor_year
     previous_start: date | None = None
     for idx, (heading, body_lines) in enumerate(blocks):
-        raw = heading[len("## Week of ") :].strip()
+        raw = SUMMARY_HEADER_RE.match(heading).group(1)
         start, end, current_year = parse_week_range(raw, current_year, previous_start)
         previous_start = start
         weeks.append(
@@ -398,6 +403,7 @@ def build_synthetic_week_turn(
     matched_units: list[OldUnit],
     source: pathlib.Path,
     sequence: int,
+    speaker_name: str,
 ) -> list[dict[str, Any]]:
     first = matched_units[0]
     last = matched_units[-1]
@@ -415,7 +421,7 @@ def build_synthetic_week_turn(
     started_at = int(start_dt.timestamp())
     completed_at = int(end_dt.timestamp())
     duration_ms = max(0, int((end_dt - start_dt).total_seconds() * 1000))
-    summary_markdown = f"[Codex]\n\n{week.as_markdown()}"
+    summary_markdown = f"[{speaker_name}]\n\n{week.as_markdown()}"
     completion_preview = f"Inserted weekly continuity summary for {week.heading[3:]}."
 
     started_payload: dict[str, Any] = {
@@ -603,7 +609,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             continue
         week, first_pos, last_pos = start_mapping
         matched = [old_units[pos] for pos in range(first_pos, last_pos + 1) if old_units[pos].matchable]
-        synthetic = build_synthetic_week_turn(week, matched, source=source, sequence=inserted_week_summaries)
+        synthetic = build_synthetic_week_turn(week, matched, source, inserted_week_summaries, args.speaker_name)
         rebuilt_old_rows.extend(synthetic)
         for pos in range(first_pos, last_pos + 1):
             if not old_units[pos].matchable:
@@ -667,6 +673,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "warnings": [],
         "policy": {
             "profile": PROFILE,
+            "speaker_name": args.speaker_name,
             "safe_tail_turns": args.safe_tail_turns,
             "dry_run_only": bool(args.dry_run_only),
             "summary_format": "weekly-markdown-verbatim",
@@ -704,6 +711,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
         manifest.setdefault("policy", {})
         manifest["policy"]["summary_file"] = str(summary_file)
+        manifest["policy"]["speaker_name"] = args.speaker_name
         manifest["policy"]["safe_tail_turns"] = args.safe_tail_turns
         manifest["policy"]["synthetic_week_turn_rows"] = 3
         manifest["policy"]["compacted_replacement_history"] = "stripped_to_activate_visible_weekly_summaries"
