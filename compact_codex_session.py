@@ -199,11 +199,6 @@ def parse_args() -> argparse.Namespace:
         metavar="MODEL",
         help="Rewrite all turn_context model fields to MODEL (opt-in).",
     )
-    parser.add_argument(
-        "--no-anchor-refresh",
-        action="store_true",
-        help="Deprecated no-op retained for CLI compatibility.",
-    )
     return parser.parse_args()
 
 
@@ -1025,8 +1020,6 @@ def write_thread_marker(
 def main() -> int:
     args = parse_args()
     apply_profile_defaults(args)
-    if args.no_anchor_refresh:
-        print("NOTE: --no-anchor-refresh is deprecated and has no effect.", file=sys.stderr)
     if args.warn_depth < 0 or args.max_depth < 0:
         raise SystemExit("warn-depth and max-depth must be non-negative.")
     if args.warn_depth >= args.max_depth:

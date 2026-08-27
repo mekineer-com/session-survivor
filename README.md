@@ -156,10 +156,6 @@ Session markers:
   - currently `safe` only, plus `--show-summary` and `--show-lineage`
 - `codex_safety.py`
   - depth guard and model switch detection helpers for Codex compactor
-- `fix-codex-session.py`
-  - one-off scrubber for model contamination inside `compacted.replacement_history`
-  - two importable functions: `scrub_replacement_history_model`, `scrub_replacement_history_phrases`
-  - covers a scope `--normalize-model` does not reach (replacement_history items, not turn_context)
 - `lineage.py`
   - provenance and parent/child session lineage helpers
 - `reproduce_codex_session_profiles.sh`
@@ -274,14 +270,11 @@ Use this order:
   - `python3 chat_codex_session.py /path/to/rollout.jsonl --max-message-chars 20000`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl --safe-tail-turns 8`
 
-Pre-boundary repair:
+Pre-boundary guard:
 
-- old Codex sessions may contain thousands of chat rows before the first `task_started`
+- malformed or obsolete Codex sessions may contain thousands of chat rows before the first `task_started`
 - `chat_codex_session.py` refuses those because treating them as permanent header can leave the session too large to resume/compact
-- repair explicitly, then run chat compaction on the repaired copy:
-  - `python3 repair_codex_preboundary_header.py /path/to/rollout.jsonl`
-  - `python3 chat_codex_session.py /path/to/repaired.jsonl --show-summary`
-  - swap only after JSON validation and a sane summary (`messages_truncated` should be `0`)
+- preserve the source and investigate instead of applying a generic historical repair
 
 `chat-v3 + chat-resume` (recommended when you already have weekly summaries):
 

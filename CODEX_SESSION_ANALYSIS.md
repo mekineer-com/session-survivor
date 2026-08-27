@@ -59,10 +59,6 @@ In [chat_codex_session.py](/home/marcos/apps-codex/session-survivor/chat_codex_s
   - aborts on Codex format drift
   - aborts when no `task_started` turns exist
 
-In [fix-codex-session.py](/home/marcos/apps-codex/session-survivor/fix-codex-session.py):
-
-- targeted replacement-history scrub helpers for contamination not covered by `--normalize-model`.
-
 In [chat_codex_v3.py](/home/marcos/apps-codex/session-survivor/chat_codex_v3.py):
 
 - Weekly-summary activation path:

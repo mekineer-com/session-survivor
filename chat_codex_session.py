@@ -596,7 +596,7 @@ def main() -> int:
         raise SystemExit(
             "Pre-boundary history is too large for chat compaction "
             f"({len(pre_boundary_rows)} records, {pre_boundary_bytes} bytes before first task_started). "
-            "Run repair_codex_preboundary_header.py first, then rerun chat_codex_session.py."
+            "Preserve the source and investigate this unsupported shape before compaction."
         )
     state["kept_header_records"] = len(header_rows)
 
