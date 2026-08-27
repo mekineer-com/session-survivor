@@ -322,6 +322,11 @@ def compact_chat_records(
             state["dropped_old_boundary_events"] += 1
             continue
         if boundary in {"task_started", "task_complete"}:
+            if boundary == "task_complete" and isinstance(obj.get("payload"), dict) and "error" in obj["payload"]:
+                obj = dict(obj)
+                obj["payload"] = dict(obj["payload"])
+                obj["payload"].pop("error")
+                state["dropped_old_task_complete_errors"] += 1
             # Preserve turn boundaries so resume can retain chronological
             # structure in older compacted history.
             compacted.append(obj)
@@ -517,6 +522,7 @@ def main() -> int:
         "dropped_bootstrap_noise": 0,
         "dropped_meta_noise": 0,
         "dropped_old_boundary_events": 0,
+        "dropped_old_task_complete_errors": 0,
         "synthetic_old_task_complete": 0,
         "messages_truncated": 0,
         "synthetic_timestamp_assigned": 0,
