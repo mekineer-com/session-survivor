@@ -456,6 +456,49 @@ def compact_old_turn(
     rows = compact_chat_records(turn, args, state)
     if not any(turn_boundary_type(obj) == "task_complete" for obj in turn):
         rows.append(closing_task_complete(turn, state))
+
+    messages = [
+        obj
+        for obj in rows
+        if obj.get("type") == "response_item"
+        and isinstance(obj.get("payload"), dict)
+        and obj["payload"].get("type") == "message"
+    ]
+    user = next((obj for obj in messages if obj["payload"].get("role") == "user"), None)
+    assistants = [obj for obj in messages if obj["payload"].get("role") == "assistant"]
+    agent = next(
+        (obj for obj in reversed(assistants) if obj["payload"].get("phase") == "final_answer"),
+        assistants[-1] if assistants else None,
+    )
+
+    if user is not None:
+        payload = user["payload"]
+        event = {
+            "type": "event_msg",
+            "timestamp": user.get("timestamp"),
+            "payload": {"type": "user_message", "message": extract_message_text(payload.get("content"))},
+        }
+        start_index = next((i for i, obj in enumerate(rows) if turn_boundary_type(obj) == "task_started"), -1)
+        rows.insert(start_index + 1, event)
+        state["synthetic_old_user_message_events"] += 1
+
+    if agent is not None:
+        payload = agent["payload"]
+        event = {
+            "type": "event_msg",
+            "timestamp": agent.get("timestamp"),
+            "payload": {
+                "type": "agent_message",
+                "message": extract_message_text(payload.get("content")),
+                "phase": payload.get("phase"),
+            },
+        }
+        complete_index = next(
+            (i for i, obj in enumerate(rows) if turn_boundary_type(obj) == "task_complete"),
+            len(rows),
+        )
+        rows.insert(complete_index, event)
+        state["synthetic_old_agent_message_events"] += 1
     return rows
 
 
@@ -524,6 +567,8 @@ def main() -> int:
         "dropped_old_boundary_events": 0,
         "dropped_old_task_complete_errors": 0,
         "synthetic_old_task_complete": 0,
+        "synthetic_old_user_message_events": 0,
+        "synthetic_old_agent_message_events": 0,
         "messages_truncated": 0,
         "synthetic_timestamp_assigned": 0,
         "safe_tail_reasoning_encrypted_removed": 0,
@@ -639,10 +684,12 @@ def main() -> int:
             "kept_compacted_anchor": compacted_anchor_policy,
             "chat_history_kept_boundary_event_types": ["task_started", "task_complete"],
             "chat_history_dropped_event_types": ["turn_aborted"],
+            "chat_history_synthetic_event_types": ["user_message", "agent_message"],
             "safe_tail_kept_record_types": ["event_msg", "response_item", "turn_context", "world_state", "compacted"],
             "output_record_types": [
                 "session_meta/header",
                 old_history_output_type,
+                "event_msg.user_message + event_msg.agent_message(summary replay)",
                 "safe-tail(native turn records)",
             ],
         },
@@ -674,6 +721,7 @@ def main() -> int:
     manifest["policy"]["compacted_replacement_history"] = "latest_native_checkpoint_pruned_older_stripped"
     manifest["policy"]["chat_history_kept_boundary_event_types"] = ["task_started", "task_complete"]
     manifest["policy"]["chat_history_dropped_event_types"] = ["turn_aborted"]
+    manifest["policy"]["chat_history_synthetic_event_types"] = ["user_message", "agent_message"]
     manifest["policy"]["safe_tail_kept_record_types"] = [
         "event_msg",
         "response_item",

@@ -256,6 +256,7 @@ Use this order:
 `chat-resume-hybrid-safe-tail` (`chat_codex_session.py`):
 
 - old history becomes chat-focused (`user`/`assistant` text)
+- emits one user/final-assistant replay pair per old turn for current Codex TUI history
 - keeps old-history compacted rows with readable summary text
 - keeps the newest old-history compacted checkpoint row, but prunes non-summary `replacement_history` user-message bulk by default
 - strips older old-history `payload.replacement_history` because it is superseded bulk
