@@ -685,7 +685,14 @@ def main() -> int:
             "chat_history_kept_boundary_event_types": ["task_started", "task_complete"],
             "chat_history_dropped_event_types": ["turn_aborted"],
             "chat_history_synthetic_event_types": ["user_message", "agent_message"],
-            "safe_tail_kept_record_types": ["event_msg", "response_item", "turn_context", "world_state", "compacted"],
+            "safe_tail_kept_record_types": [
+                "event_msg",
+                "response_item",
+                "turn_context",
+                "world_state",
+                "token_usage_record",
+                "compacted",
+            ],
             "output_record_types": [
                 "session_meta/header",
                 old_history_output_type,
@@ -727,6 +734,7 @@ def main() -> int:
         "response_item",
         "turn_context",
         "world_state",
+        "token_usage_record",
         "compacted",
     ]
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

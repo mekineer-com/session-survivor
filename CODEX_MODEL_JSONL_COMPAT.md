@@ -1,6 +1,6 @@
 # Codex JSONL model compatibility
 
-Last verified: 2026-07-12
+Last verified: 2026-09-04
 
 ## Stable loader contract
 
@@ -11,6 +11,26 @@ All models checked so far keep the core records used by `chat_codex_session.py`:
 - chat messages: `response_item.payload.type == "message"` and `role in {user, assistant}`
 
 Unknown fields are preserved in the native safe tail because `compact_record()` deep-copies records and edits only known heavy fields.
+
+## `gpt-6-astra` / Codex CLI `0.153.3`
+
+Verified: 2026-09-04
+
+The first 12 Astra turns were compared at the exact byte boundary where the long session changed from `gpt-5.6-sol` on the previous CLI to `gpt-6-astra` on Codex CLI `0.153.3`. Because the model and CLI changed together, the additions below belong to that combined runtime boundary rather than conclusively to the model alone.
+
+### Observed additions
+
+- `turn_context.payload` gained `root_turn_id`.
+- A top-level `token_usage_record` is emitted after model responses. Its payload identifies the thread, session, turn, root turn, and response and reports response, turn, and cumulative thread token usage.
+
+The existing `world_state` record predates Astra; it first appeared in this session under the earlier runtime.
+
+### Session-survivor compatibility
+
+- The 12 sampled turns retained balanced `task_started` / `task_complete` boundaries.
+- Message, reasoning, custom-tool-call, and custom-tool-output shapes remained compatible.
+- `compact_record()` preserves `root_turn_id` and passes `token_usage_record` through unchanged in the native safe tail.
+- Chat-focused old-history compaction discards old token-usage bookkeeping with other non-message machinery. This does not remove conversation memory, and Codex can resume session files created before these records existed.
 
 ## `gpt-5.3-codex` and `gpt-5.5`
 
