@@ -80,19 +80,47 @@ possible cause of repeated mistakes. It does not establish whether model
 behavior, instruction conflicts, context pressure or briefing habits dominate.
 Evaluate actual subsequent delegation briefs, not just recalled rules.
 
+## Disposable loader experiment (2026-09-05)
+
+Run `python3 test_grok_resume.py` with Grok Build installed. It creates a new
+temporary HOME and GROK_HOME, uses fictional dialogue, and routes model
+requests to a localhost SSE stub. No real credentials or model quota are used.
+Artifacts are retained at the path printed by the test. All subprocesses have
+timeouts, and edits happen only between exited invocations.
+
+Passed with Grok Build 1.0.13:
+
+- Ordinary headless resume sends edited chat_history.jsonl content to the model
+  even when updates.jsonl still holds the original text.
+- Native auto-compaction creates real checkpoint files with the stub's summary.
+- Editing that summary in chat_history.jsonl survives two subsequent resumes;
+  old checkpoint contents do not replace it in captured model requests.
+- New prompts and responses persist across those invocations.
+- Grok's native Markdown export still contains the original user/assistant
+  exchange from updates.jsonl, despite the changed model history.
+
+The first tiny stub summary was rejected as degenerate (16 characters for
+roughly 7k input tokens). The final test provides a longer fictional summary
+and asserts that native checkpoint creation actually succeeded.
+
+These results establish ordinary headless loader precedence for format v1.
+Export is evidence of transcript retention, not a TUI rendering test. No
+tool-pair rewrite, rewind operation, checkpoint deletion, historical dialogue
+reconstruction, or live-session swap has been tested yet.
+
 ## Required before a writer is considered safe
 
 Installed docs identify both restore updates and model chat, but do not specify
-their precedence when checkpoints are present. No local loader source was
-located in the installed docs/bundle inspection. A disposable synthetic session
-must establish which files resume consumes, whether a checkpoint overrides
-rebuilt chat, and what counters/rewind references must be updated together.
-Verify old dialogue display, model-visible context, a new completed turn,
-second resume, and handling of tool pairs. Do not test by resuming Rook's file.
+their precedence when checkpoints are present. The experiment above resolves
+ordinary headless precedence. No local loader source was located in the
+installed docs/bundle inspection. Still establish what counters/rewind
+references must be updated together when pruning and verify tool pairs,
+historical dialogue reconstruction, and TUI replay. Do not test by resuming
+Rook's file.
 
 Until that contract is verified, do not delete checkpoints, rebuild only
 chat_history.jsonl, or publish an unverified chat_grok_session.py as safe.
-This document is a format study, not a completed compactor or resume test.
+This document is a format study with loader tests, not a completed compactor.
 
 Local reference: ~/.grok/docs/user-guide/17-sessions.md. The older installed
 README disagrees with that guide on some CLI details; use the current help and
