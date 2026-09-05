@@ -6,7 +6,9 @@ import argparse
 import hashlib
 import json
 import pathlib
+import shutil
 import sys
+import tempfile
 from typing import Any
 
 from compact_codex_session import MAX_COMPACTED_REPLACEMENT_HISTORY, compact_record, core_format_warnings
@@ -537,12 +539,6 @@ def main() -> int:
     manifest_path = output_root / "manifests" / rel.with_suffix(".manifest.json")
 
     original_bytes = source.read_bytes()
-    original_copy.parent.mkdir(parents=True, exist_ok=True)
-    compacted_copy.parent.mkdir(parents=True, exist_ok=True)
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    original_copy.write_bytes(original_bytes)
-
     original_sha256 = sha256_bytes(original_bytes)
     original_validation = validate_jsonl_bytes(original_bytes)
     records = [json.loads(line) for line in original_bytes.splitlines()]
@@ -639,14 +635,11 @@ def main() -> int:
     if not old_history_rows and not safe_tail_rows:
         raise SystemExit("No records survived filtering; refusing to write empty output file.")
 
-    with compacted_copy.open("w", encoding="utf-8") as dst:
-        for row in old_history_rows:
-            dst.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
-        for row in safe_tail_rows:
-            dst.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
-
-    compacted_validation = validate_jsonl(compacted_copy)
-    compacted_bytes = compacted_copy.read_bytes()
+    compacted_bytes = b"".join(
+        (json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        for row in old_history_rows + safe_tail_rows
+    )
+    compacted_validation = validate_jsonl_bytes(compacted_bytes)
     compacted_sha256 = sha256_bytes(compacted_bytes)
     generated_at = None
     if safe_tail_rows:
@@ -737,8 +730,38 @@ def main() -> int:
         "token_usage_record",
         "compacted",
     ]
-    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    output_root.mkdir(parents=True, exist_ok=True)
+    staging = pathlib.Path(tempfile.mkdtemp(prefix=".codex-building-", dir=output_root))
+    staged_paths = {
+        original_copy: staging / "original" / rel,
+        compacted_copy: staging / "compacted" / rel,
+        report_path: staging / "reports" / rel.with_suffix(".report.json"),
+        manifest_path: staging / "manifests" / rel.with_suffix(".manifest.json"),
+    }
+    try:
+        for path in staged_paths.values():
+            path.parent.mkdir(parents=True, exist_ok=True)
+        staged_paths[original_copy].write_bytes(original_bytes)
+        staged_paths[compacted_copy].write_bytes(compacted_bytes)
+        staged_paths[report_path].write_text(
+            json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        staged_paths[manifest_path].write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+
+        validate_jsonl(staged_paths[original_copy])
+        validate_jsonl(staged_paths[compacted_copy])
+        json.loads(staged_paths[report_path].read_text(encoding="utf-8"))
+        json.loads(staged_paths[manifest_path].read_text(encoding="utf-8"))
+        if source.read_bytes() != original_bytes:
+            raise RuntimeError("Source changed during candidate generation; outputs were not published.")
+
+        for final_path in (original_copy, compacted_copy, report_path, manifest_path):
+            final_path.parent.mkdir(parents=True, exist_ok=True)
+            staged_paths[final_path].replace(final_path)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
     if args.show_summary:
         print(

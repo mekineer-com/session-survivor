@@ -302,6 +302,7 @@ Use this order:
 - fails loud on format drift or missing `task_started` turns
 - tail compaction knobs: `--max-tool-input-chars`, `--max-reasoning-chars`
 - source selection rule: use exactly one source (`--latest` or explicit path)
+- builds and validates backup, candidate, report, and manifest in a private `.codex-building-*` directory; publishes the manifest last
 - usage:
   - `python3 chat_codex_session.py --latest --show-summary`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl`
