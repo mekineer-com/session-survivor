@@ -3,12 +3,15 @@
 
 import json
 import os
+import queue
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from chat_grok_session import build_candidate, read_rows, write_rows
 
 
 def main():
@@ -113,6 +116,102 @@ def main():
         assert 'TEST_USER_COBALT' in exported.stdout
         assert 'TEST_REPLY_AMBER' in exported.stdout
         print('PASS: original dialogue remains in Grok transcript export', flush=True)
+        # Keep the restored full dialogue below the test model's compact threshold.
+        config = home / 'config.toml'
+        config.write_text(config.read_text().replace('8192', '128000'))
+        rows = read_rows(chat)
+        rows[-1:-1] = [
+            {'type': 'assistant', 'content': 'TEST_TOOL_PREFACE', 'tool_calls': [
+                {'id': 'synthetic-call', 'name': 'read_file', 'arguments': '{"path":"fiction.txt"}'}]},
+            {'type': 'tool_result', 'tool_call_id': 'synthetic-call', 'content': 'TEST_TOOL_RESULT'},
+        ]
+        write_rows(chat, rows)
+        updates = read_rows(session / 'updates.jsonl')
+        tool_row = json.loads(json.dumps(updates[0]))
+        tool_row['params']['update'] = {'sessionUpdate': 'tool_call', 'toolCallId': 'old-synthetic-call',
+                                        'title': 'Synthetic read', 'status': 'completed',
+                                        'rawInput': {'large': 'TEST_OLD_BULK' * 1000}}
+        tool_row['params']['_meta']['eventId'] += '-fixture-tool'
+        updates.insert(1, tool_row)
+        write_rows(session / 'updates.jsonl', updates)
+        source_bytes = chat.read_bytes()
+        report = build_candidate(session, root / 'candidate-test')
+        assert chat.read_bytes() == source_bytes
+        candidate = Path(report['compacted_copy'])
+        rebuilt = read_rows(candidate / 'chat_history.jsonl')
+        assert any(row.get('tool_call_id') == 'synthetic-call' for row in rebuilt)
+        assert 'TEST_USER_COBALT' in json.dumps(rebuilt)
+        assert 'TEST_OLD_BULK' not in (candidate / 'updates.jsonl').read_text()
+        assert (candidate / 'rewind_points.jsonl').read_bytes() == (session / 'rewind_points.jsonl').read_bytes()
+        # Only the disposable installation is swapped, with its previous tree retained.
+        session.rename(root / 'pre-candidate')
+        shutil.copytree(candidate, session)
+        text = run('candidate-resume', '-r', session_id, '-p', 'Continue TEST_CANDIDATE_BLACK.')
+        assert 'TEST_USER_COBALT' in text and 'TEST_TOOL_RESULT' in text
+        text = run('candidate-second-resume', '-r', session_id, '-p', 'Continue TEST_CANDIDATE_GRAY.')
+        assert 'TEST_USER_COBALT' in text and 'TEST_TOOL_RESULT' in text
+        print('PASS: rebuilt dialogue and native tool pair reach the model on two resumes', flush=True)
+
+        notifications = []
+        messages = queue.Queue()
+        with (root / 'acp.stderr').open('w') as stderr:
+            proc = subprocess.Popen([binary, 'agent', '--no-leader', '-m', 'probe', 'stdio'],
+                                    env=env, cwd=workspace, text=True, stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, stderr=stderr)
+            def read_messages():
+                for line in proc.stdout:
+                    messages.put(json.loads(line))
+            threading.Thread(target=read_messages, daemon=True).start()
+            def rpc(method, params, number):
+                proc.stdin.write(json.dumps({'jsonrpc': '2.0', 'id': number,
+                                             'method': method, 'params': params}) + '\n')
+                proc.stdin.flush()
+                while True:
+                    message = messages.get(timeout=20)
+                    notifications.append(message)
+                    if message.get('id') == number:
+                        if 'error' in message:
+                            raise RuntimeError(message)
+                        return message.get('result')
+            try:
+                rpc('initialize', {'protocolVersion': 1, 'clientCapabilities': {}}, 1)
+                rpc('session/load', {'sessionId': session_id, 'cwd': str(workspace), 'mcpServers': []}, 2)
+                assert 'TEST_USER_COBALT' in json.dumps(notifications)
+                points = rpc('_x.ai/rewind/points', {'sessionId': session_id}, 3)
+                (root / 'rewind-points.json').write_text(json.dumps(points, indent=2))
+                assert points['rewind_points'][0]['prompt_index'] == 0
+                assert 'TEST_USER_COBALT' in points['rewind_points'][0]['prompt_preview']
+                print('PASS: ACP session/load replays original dialogue; rewind points load', flush=True)
+                rpc('session/prompt', {'sessionId': session_id,
+                                      'prompt': [{'type': 'text', 'text': 'TEST_ACP_WARMUP'}]}, 4)
+                result = rpc('_x.ai/rewind/execute', {'sessionId': session_id, 'targetPromptIndex': 1,
+                                                     'mode': 'conversation_only'}, 5)
+                (root / 'rewind-result.json').write_text(json.dumps(result, indent=2))
+                if not result['success']:
+                    # Reproduce the same result on the untouched one-turn control.
+                    control_id = '11111111-1111-4111-8111-111111111111'
+                    control = session.parent / control_id
+                    shutil.copytree(baseline, control)
+                    meta = json.loads((control / 'summary.json').read_text())
+                    meta['info']['id'] = control_id
+                    (control / 'summary.json').write_text(json.dumps(meta))
+                    control_updates = control / 'updates.jsonl'
+                    control_updates.write_text(control_updates.read_text().replace(session_id, control_id))
+                    rpc('session/load', {'sessionId': control_id, 'cwd': str(workspace), 'mcpServers': []}, 6)
+                    control_result = rpc('_x.ai/rewind/execute', {'sessionId': control_id,
+                                         'targetPromptIndex': 0, 'mode': 'conversation_only'}, 7)
+                    (root / 'rewind-control.json').write_text(json.dumps(control_result, indent=2))
+                    assert control_result['success'] is False, control_result
+                    print('LIMITATION: rewind execution returns false on candidate AND untouched control', flush=True)
+            finally:
+                (root / 'acp.json').write_text(json.dumps(notifications, indent=2))
+                proc.terminate()
+                proc.wait(timeout=10)
+        if result['success']:
+            text = run('after-rewind', '-r', session_id, '-p', 'Continue TEST_AFTER_REWIND.')
+            assert 'TEST_USER_COBALT' in text
+            assert 'TEST_CANDIDATE_GRAY' not in text and 'TEST_CANDIDATE_BLACK' not in text
+            print('PASS: rewind to reconstructed history then resume excludes later turns', flush=True)
         print(f'Session: {session}', flush=True)
     finally:
         server.shutdown()

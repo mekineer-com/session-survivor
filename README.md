@@ -13,6 +13,9 @@ Default operator path:
 
 Current support:
 
+- Grok Build session directories (format v1, tested with 1.0.13)
+  - `chat_grok_session.py`: verbatim old dialogue plus a native recent turn
+  - offline backup/candidate only; see rewind limitation below
 - Codex JSONL
   - `safe`
   - `resume`
@@ -62,6 +65,36 @@ python3 chat_codex_session.py --latest --show-summary
 python3 chat_claude_session.py /path/to/claude.jsonl --show-summary
 python3 chat_codex_v3.py --latest --summary-file /path/to/WEEKLY_SUMMARIES.md --show-summary
 ```
+
+Grok: exit the session first, then provide its directory and a NEW output directory:
+
+```sh
+python3 chat_grok_session.py /path/to/grok/session-uuid --output-root outputs/grok-maintenance-unique
+```
+
+This creates a full `original/` backup, `compacted/` candidate and `manifest.json`
+with per-file hashes. It never swaps the source. The default retains the newest
+complete native turn (`--safe-tail-turns 1`); older user/assistant dialogue is
+rebuilt verbatim from `updates.jsonl`, with no text cap or generated summary.
+Old tool payloads and thought text in display updates are emptied while their
+record envelopes remain. Identity, prompt indices, timestamps, checkpoints,
+rewind records and auxiliary artifacts are retained. Total disk size therefore
+includes archives that are not sent to the model; restored chat context can
+grow relative to Grok's latest short native summary.
+
+The script refuses active registered sessions, unfinished tails, missing prompt
+indices, unsupported formats and non-text older dialogue. Source hashes are
+checked through backup and candidate generation. Only consider a candidate with
+a completed manifest; validation failure can leave partial output for inspection.
+
+Tests: `python3 -m unittest test_chat_grok_session.py` and the opt-in
+`python3 test_grok_resume.py`. The latter runs Grok against a localhost model
+stub, consumes no model quota, and retains synthetic artifacts under `/tmp`.
+Two resumes, native checkpoints, tool-pair transport, transcript export and ACP
+UI-history replay pass. **Rewind execution is not certified:** Grok 1.0.13 returns
+`success:false` for both the candidate and an uncompacted control in the tested
+ACP flow. Rewind points still load; no workaround or checkpoint deletion is applied.
+Details: [GROK_SESSION_ANALYSIS.md](GROK_SESSION_ANALYSIS.md).
 
 Codex `safe` + `resume` profile reproduction (advanced):
 

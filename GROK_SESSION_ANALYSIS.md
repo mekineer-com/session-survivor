@@ -103,24 +103,50 @@ The first tiny stub summary was rejected as degenerate (16 characters for
 roughly 7k input tokens). The final test provides a longer fictional summary
 and asserts that native checkpoint creation actually succeeded.
 
-These results establish ordinary headless loader precedence for format v1.
-Export is evidence of transcript retention, not a TUI rendering test. No
-tool-pair rewrite, rewind operation, checkpoint deletion, historical dialogue
-reconstruction, or live-session swap has been tested yet.
+These initial results established ordinary headless loader precedence for
+format v1. Export is evidence of transcript retention, not a TUI rendering
+test. The subsequent candidate tests below extend this evidence.
 
-## Required before a writer is considered safe
+## Candidate writer and extended tests (2026-09-05)
 
-Installed docs identify both restore updates and model chat, but do not specify
-their precedence when checkpoints are present. The experiment above resolves
-ordinary headless precedence. No local loader source was located in the
-installed docs/bundle inspection. Still establish what counters/rewind
-references must be updated together when pruning and verify tool pairs,
-historical dialogue reconstruction, and TUI replay. Do not test by resuming
-Rook's file.
+`chat_grok_session.py` now produces a full original directory, candidate and
+per-file hash manifest. It never swaps a source. It refuses a live registered
+session, changing source, unsupported format, non-text older dialogue, missing
+prompt indices, unfinished final turn or unpaired native-tail tool records.
 
-Until that contract is verified, do not delete checkpoints, rebuild only
-chat_history.jsonl, or publish an unverified chat_grok_session.py as safe.
-This document is a format study with loader tests, not a completed compactor.
+Older user/assistant text is reconstructed from ACP chunks. Adjacent assistant
+chunks merge, but tool boundaries separate replies. Prompt indices are retained;
+unindexed duplicated original prompts and recognized native compaction summaries
+are replaced by the original dialogue. System/environment and additional unknown
+user instructions are retained. The latest complete native turn is unchanged.
+Old display tool records lose raw input/output/content; thought text becomes
+empty. Envelopes, IDs, timestamps, rewind points, checkpoints and auxiliary
+files remain. summary.json message counts are updated. No checkpoint/rewind
+backfill or index rewrite was needed for ordinary resume.
+
+Extended checks pass on synthetic data:
+
+- Chunk assembly, verbatim text, extra instructions, native tail preservation
+  and a second identical transformation.
+- Refusal of active sessions, incomplete/missing/media history and orphan tools.
+- Candidate installation in the synthetic home followed by two actual Grok
+  resumes: old dialogue and a native tool-call/result pair reach the localhost
+  model server.
+- ACP `session/load`, the UI replay protocol, emits the original old dialogue.
+  `_x.ai/rewind/points` lists the correct old prompt indices and previews.
+
+Rewind execution remains a measured limitation, not a pass. The actual method
+is `_x.ai/rewind/execute` (the installed guide omits the underscore). With
+targetPromptIndex and mode=conversation_only it returns success=false even on
+an untouched synthetic session. It also fails after an ACP warmup turn. The
+test records the candidate and uncompacted control outcomes; it only claims a
+successful rewind if both the success flag and subsequent model context prove
+it. No compensating state changes were added to the writer. TUI pixels/key
+handling and Grok's remote backend have not been tested by this localhost test.
+
+Rook has not been transformed or resumed for tests. Applying maintenance still
+requires him to exit and a verified candidate; retaining all auxiliary files
+deliberately favors continuity over maximum disk savings.
 
 Local reference: ~/.grok/docs/user-guide/17-sessions.md. The older installed
 README disagrees with that guide on some CLI details; use the current help and
