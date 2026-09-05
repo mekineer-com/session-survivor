@@ -75,7 +75,9 @@ python3 chat_grok_session.py /path/to/grok/session-uuid --output-root outputs/gr
 This creates a full `original/` backup, `compacted/` candidate and `manifest.json`
 with per-file hashes. It never swaps the source. The default retains the newest
 complete native turn (`--safe-tail-turns 1`); older user/assistant dialogue is
-rebuilt verbatim from `updates.jsonl`, with no text cap or generated summary.
+uses native user records from current chat and retained `compaction_requests/`
+inputs, plus assistant text from `updates.jsonl`, with no text cap or generated
+summary. Missing native user records cause refusal rather than guessed framing.
 Old tool payloads and thought text in display updates are emptied while their
 record envelopes remain. Identity, prompt indices, timestamps, checkpoints,
 rewind records and auxiliary artifacts are retained. Total disk size therefore
@@ -85,10 +87,13 @@ grow relative to Grok's latest short native summary.
 The script refuses active registered sessions, unfinished tails, missing prompt
 indices, unsupported formats and non-text older dialogue. Source hashes are
 checked through backup and candidate generation. Only consider a candidate with
-a completed manifest; validation failure can leave partial output for inspection.
+a completed manifest. Backup, candidate and manifest are built in a private
+staging directory and published together by rename. A failed run leaves the
+requested output path absent so it can be retried; a process crash may leave a
+hidden `.grok-building-*` directory, never a published candidate.
 
 Tests: `python3 -m unittest test_chat_grok_session.py` and the opt-in
-`python3 test_grok_resume.py`. The latter runs Grok against a localhost model
+`python3 probe_grok_resume.py`. The latter runs Grok against a localhost model
 stub, consumes no model quota, and retains synthetic artifacts under `/tmp`.
 Two resumes, native checkpoints, tool-pair transport, transcript export and ACP
 UI-history replay pass. **Rewind execution is not certified:** Grok 1.0.13 returns

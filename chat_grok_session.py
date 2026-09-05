@@ -8,15 +8,16 @@ import json
 import os
 from pathlib import Path
 import shutil
+import tempfile
 
 
 def read_rows(path):
-    with path.open() as handle:
+    with path.open(encoding='utf-8') as handle:
         return [json.loads(line) for line in handle]
 
 
 def write_rows(path, rows):
-    with path.open('w') as handle:
+    with path.open('w', encoding='utf-8') as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False, separators=(',', ':')) + '\n')
 
@@ -39,7 +40,7 @@ def validate_tools(rows):
         raise ValueError('Unfinished tool calls in native tail')
 
 
-def rebuild(chat, updates, safe_tail_turns=1):
+def rebuild(chat, updates, safe_tail_turns=1, archived_histories=()):
     if safe_tail_turns < 1:
         raise ValueError('safe-tail-turns must be at least 1')
     native_users = [(i, row['prompt_index']) for i, row in enumerate(chat)
@@ -49,6 +50,19 @@ def rebuild(chat, updates, safe_tail_turns=1):
     tail_start, tail_index = native_users[-min(safe_tail_turns, len(native_users))]
     tail = chat[tail_start:]
     validate_tools(tail)
+    native = {}
+    reminders = {}
+    for history in [*archived_histories, chat]:
+        preceding = None
+        local_reminders = {}
+        for row in history:
+            if row['type'] == 'user' and 'prompt_index' in row:
+                preceding = row['prompt_index']
+                native[preceding] = row
+                local_reminders[preceding] = []
+            elif row['type'] == 'user' and preceding is not None:
+                local_reminders[preceding].append(row)
+        reminders.update(local_reminders)
     original_queries = [row['params']['update']['content'] for row in updates
                         if row['params']['update']['sessionUpdate'] == 'user_message_chunk']
     header = []
@@ -66,7 +80,8 @@ def rebuild(chat, updates, safe_tail_turns=1):
                 text = blocks[0].get('text', '') if isinstance(blocks, list) and len(blocks) == 1 else ''
                 summary = (row.get('synthetic_reason') == 'compaction_meta'
                            and text.startswith('This session is being continued from a previous conversation'))
-                original_query = any(text == '<user_query>\n' + item.get('text', '') + '\n</user_query>'
+                original_query = any(text.removeprefix('<user_query>\n').removesuffix('\n</user_query>').rstrip()
+                                     == item.get('text', '').rstrip()
                                      for item in original_queries)
                 if not summary and not original_query:
                     header.append(row)
@@ -83,6 +98,8 @@ def rebuild(chat, updates, safe_tail_turns=1):
         event = row['params']['update']
         kind = event['sessionUpdate']
         if kind == 'user_message_chunk':
+            if current_index is not None and current_index < tail_index:
+                history.extend(reminders.get(current_index, []))
             current_index = event['_meta']['promptIndex']
             if not isinstance(current_index, int) or current_index != len(indices):
                 raise ValueError('Missing, duplicate or out-of-order prompt index; full history required')
@@ -102,8 +119,10 @@ def rebuild(chat, updates, safe_tail_turns=1):
                 raise ValueError('Non-text dialogue requires a media-aware profile')
             text = content['text']
             if kind == 'user_message_chunk':
-                history.append({'type': 'user', 'prompt_index': current_index,
-                                'content': [{'type': 'text', 'text': '<user_query>\n' + text + '\n</user_query>'}]})
+                if current_index in native:
+                    history.append(native[current_index])
+                else:
+                    raise ValueError(f'Missing native user row {current_index}; preserve compaction request archives')
                 merge_assistant = False
             elif merge_assistant:
                 history[-1]['content'] += text
@@ -146,7 +165,7 @@ def build_candidate(source, output, safe_tail_turns=1):
     source, output = Path(source).expanduser().resolve(), Path(output).expanduser().resolve()
     if output == source or source in output.parents or output.exists():
         raise ValueError('Output must be a new directory outside the source')
-    metadata = json.loads((source / 'summary.json').read_text())
+    metadata = json.loads((source / 'summary.json').read_text(encoding='utf-8'))
     if metadata.get('chat_format_version') != 1:
         raise ValueError('Only Grok chat_format_version 1 has been tested')
     homes = {Path(os.environ.get('GROK_HOME', '~/.grok')).expanduser()}
@@ -155,39 +174,64 @@ def build_candidate(source, output, safe_tail_turns=1):
     for home in homes:
         registry = home / 'active_sessions.json'
         if registry.exists():
-            for entry in json.loads(registry.read_text()):
+            for entry in json.loads(registry.read_text(encoding='utf-8')):
                 if entry.get('session_id') == metadata['info']['id']:
                     try:
-                        os.kill(int(entry['pid']), 0)
+                        pid = entry['pid']
+                        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+                            raise ValueError('Invalid registered PID; verify session is closed')
+                        os.kill(pid, 0)
                     except ProcessLookupError:
                         continue
+                    except PermissionError as exc:
+                        raise ValueError('Cannot verify registered process; verify session is closed') from exc
                     raise ValueError('Session is still registered to a running process')
     before = inventory(source)
+    archives = [json.loads(path.read_text(encoding='utf-8'))
+                for path in (source / 'compaction_requests').glob('*.json')]
+    archives.sort(key=lambda item: item['created_at'])
     chat, updates = rebuild(read_rows(source / 'chat_history.jsonl'),
-                            read_rows(source / 'updates.jsonl'), safe_tail_turns)
-    output.mkdir(parents=True, mode=0o700)
+                            read_rows(source / 'updates.jsonl'), safe_tail_turns,
+                            [item['chat_history'] for item in archives])
+    output.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix='.grok-building-', dir=output.parent))
     original = output / 'original' / source.name
     candidate = output / 'compacted' / source.name
-    shutil.copytree(source, original)
-    if inventory(original) != before or inventory(source) != before:
-        raise ValueError('Source changed during backup; candidate not created')
-    shutil.copytree(original, candidate)
+    try:
+        backup = staging / 'original' / source.name
+        shutil.copytree(source, backup)
+        if inventory(backup) != before or inventory(source) != before:
+            raise ValueError('Source changed during backup; candidate not created')
+        report = finish_candidate(source, output, original, candidate, staging, before, metadata,
+                                  chat, updates, safe_tail_turns)
+        staging.rename(output)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+    return report
+
+
+def finish_candidate(source, output, original, final_candidate, staging, before, metadata,
+                     chat, updates, safe_tail_turns):
+    candidate = staging / 'compacted' / source.name
+    shutil.copytree(staging / 'original' / source.name, candidate)
     write_rows(candidate / 'chat_history.jsonl', chat)
     write_rows(candidate / 'updates.jsonl', updates)
     metadata['num_chat_messages'] = len(chat)
     metadata['num_messages'] = len(updates)
-    (candidate / 'summary.json').write_text(json.dumps(metadata, indent=2) + '\n')
+    (candidate / 'summary.json').write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
     if (read_rows(candidate / 'chat_history.jsonl') != chat
             or read_rows(candidate / 'updates.jsonl') != updates or inventory(source) != before):
         raise ValueError('Validation failed or source changed; do not use candidate')
     after = inventory(candidate)
-    report = {'source': str(source), 'original_copy': str(original), 'compacted_copy': str(candidate),
+    report = {'source': str(source), 'original_copy': str(original), 'compacted_copy': str(final_candidate),
               'profile': 'grok-chat-v1', 'safe_tail_turns': safe_tail_turns,
               'source_files': before, 'candidate_files': after,
               'bytes_saved': sum(x['bytes'] for x in before.values()) - sum(x['bytes'] for x in after.values()),
               'chat_records': len(chat), 'update_records': len(updates),
               'policy': 'verbatim old dialogue; native tail; old update tool payloads emptied; auxiliary files retained'}
-    (output / 'manifest.json').write_text(json.dumps(report, indent=2) + '\n')
+    manifest = staging / 'manifest.json'
+    manifest.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
     return report
 
 

@@ -82,7 +82,7 @@ Evaluate actual subsequent delegation briefs, not just recalled rules.
 
 ## Disposable loader experiment (2026-09-05)
 
-Run `python3 test_grok_resume.py` with Grok Build installed. It creates a new
+Run `python3 probe_grok_resume.py` with Grok Build installed. It creates a new
 temporary HOME and GROK_HOME, uses fictional dialogue, and routes model
 requests to a localhost SSE stub. No real credentials or model quota are used.
 Artifacts are retained at the path printed by the test. All subprocesses have
@@ -114,7 +114,12 @@ per-file hash manifest. It never swaps a source. It refuses a live registered
 session, changing source, unsupported format, non-text older dialogue, missing
 prompt indices, unfinished final turn or unpaired native-tail tool records.
 
-Older user/assistant text is reconstructed from ACP chunks. Adjacent assistant
+Older user records are reused verbatim from current chat and chronologically
+ordered `compaction_requests/*.json` native inputs. This preserves synthetic
+reasons, interruption flags and injected framing; if any native user record is
+missing, the writer refuses rather than guessing from display text. Unindexed
+user reminders remain associated with the preceding prompt. Assistant text is
+reconstructed from ACP chunks. Adjacent assistant
 chunks merge, but tool boundaries separate replies. Prompt indices are retained;
 unindexed duplicated original prompts and recognized native compaction summaries
 are replaced by the original dialogue. System/environment and additional unknown
@@ -123,6 +128,19 @@ Old display tool records lose raw input/output/content; thought text becomes
 empty. Envelopes, IDs, timestamps, rewind points, checkpoints and auxiliary
 files remain. summary.json message counts are updated. No checkpoint/rewind
 backfill or index rewrite was needed for ordinary resume.
+
+Team-audit corrections (2026-09-05): duplicate header queries are matched with
+trailing-whitespace tolerance. Text IO is explicitly UTF-8. Backup, candidate
+and manifest are staged privately and renamed together only after validation;
+injected write failure leaves no published output and retry succeeds. Active
+PID permission failures and malformed PIDs refuse clearly. PID reuse remains a
+possible conservative false refusal: age alone is not evidence a session is
+closed, so no timestamp-based bypass was added. The manual integration probe
+is named `probe_grok_resume.py`; automated regressions use unittest discovery.
+Regression data uses fictional text with the observed native schema, never
+Marcos's actual conversation as test input. The local model probe explicitly
+saves synthetic native inputs because that Grok configuration does not retain
+compaction requests by default.
 
 Extended checks pass on synthetic data:
 

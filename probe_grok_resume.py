@@ -27,6 +27,12 @@ def main():
             last = str(body.get('messages', [{}])[-1].get('content', ''))
             reply = 'TEST_REPLY_AMBER'
             if 'compaction' in last or 'faithful, concise summary' in last:
+                for path in home.glob('sessions/*/*/chat_history.jsonl'):
+                    archive_dir = path.parent / 'compaction_requests'
+                    archive_dir.mkdir(exist_ok=True)
+                    name = f'probe-{len(requests):04}'
+                    (archive_dir / (name + '.json')).write_text(json.dumps({
+                        'created_at': name, 'chat_history': read_rows(path)}), encoding='utf-8')
                 reply = 'TEST_CHECKPOINT_VIOLET\n' + '\n'.join(
                     f'Fictional garden bed {i}: record its label, keep the blue marker, '
                     'and continue the synthetic storage experiment. No actual work is pending.'
@@ -97,7 +103,16 @@ def main():
         text = run('edited-chat-resume', '-r', session_id, '-p', 'Continue TEST_THIRD_SILVER.')
         assert 'TEST_CHAT_JADE' in text and 'TEST_USER_COBALT' not in text
         print('PASS: ordinary resume uses edited model chat rather than display updates', flush=True)
+        # Retain native input like Grok's optional compaction-request archive.
+        chat.write_text(chat.read_text().replace('TEST_CHAT_JADE', 'TEST_USER_COBALT'))
+        archive = session / 'compaction_requests'
+        archive.mkdir(exist_ok=True)
+        def save_native(name):
+            (archive / (name + '.json')).write_text(json.dumps({
+                'created_at': name, 'chat_history': read_rows(chat)}), encoding='utf-8')
+        save_native('01-before-grow')
         run('grow', '-r', session_id, '-p', 'TEST_LONG_HISTORY ' + 'fictional garden note. ' * 1500)
+        save_native('02-before-compact')
         run('compact', '-r', session_id, '-p', 'TEST_AFTER_COMPACT')
         checkpoints = list((session / 'compaction_checkpoints').glob('*.json'))
         assert checkpoints, 'Native compaction did not produce a checkpoint'
