@@ -302,6 +302,7 @@ Use this order:
 - fails loud on format drift or missing `task_started` turns
 - tail compaction knobs: `--max-tool-input-chars`, `--max-reasoning-chars`
 - source selection rule: use exactly one source (`--latest` or explicit path)
+- refuses when an explicit source would resolve onto one of its own output paths; use a different `--output-root` for candidate-of-candidate work
 - builds and validates backup, candidate, report, and manifest in a private `.codex-building-*` directory; removes any old manifest before replacing files and publishes the new manifest last
 - the manifest is the completion seal: without it, artifacts may be absent or mixed across an interrupted rerun and must not be used
 - usage:

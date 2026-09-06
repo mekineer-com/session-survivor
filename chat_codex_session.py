@@ -537,6 +537,8 @@ def main() -> int:
     compacted_copy = output_root / "compacted" / rel
     report_path = output_root / "reports" / rel.with_suffix(".report.json")
     manifest_path = output_root / "manifests" / rel.with_suffix(".manifest.json")
+    if source in {original_copy, compacted_copy, report_path, manifest_path}:
+        raise SystemExit("Output path would overwrite the source; use a different --output-root.")
 
     original_bytes = source.read_bytes()
     original_sha256 = sha256_bytes(original_bytes)

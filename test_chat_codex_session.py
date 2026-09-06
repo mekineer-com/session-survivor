@@ -102,6 +102,19 @@ class ChatCodexSessionTest(unittest.TestCase):
             self.assertEqual(run_candidate(args), 0)
             self.assertTrue(all(path.exists() for path in public_paths))
 
+    def test_refuses_to_overwrite_candidate_used_as_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, output, args, public_paths = candidate_fixture(Path(directory))
+            self.assertEqual(run_candidate(args), 0)
+            candidate = public_paths[1]
+            candidate_before = candidate.read_bytes()
+            args.session = str(candidate)
+
+            with self.assertRaisesRegex(SystemExit, "overwrite the source"):
+                run_candidate(args)
+
+            self.assertEqual(candidate.read_bytes(), candidate_before)
+
     def test_old_completion_keeps_boundary_without_stale_error(self) -> None:
         row = {
             "type": "event_msg",
