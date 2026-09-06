@@ -757,6 +757,7 @@ def main() -> int:
         if source.read_bytes() != original_bytes:
             raise RuntimeError("Source changed during candidate generation; outputs were not published.")
 
+        manifest_path.unlink(missing_ok=True)
         for final_path in (original_copy, compacted_copy, report_path, manifest_path):
             final_path.parent.mkdir(parents=True, exist_ok=True)
             staged_paths[final_path].replace(final_path)
