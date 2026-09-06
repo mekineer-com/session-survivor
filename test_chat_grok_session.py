@@ -88,6 +88,11 @@ class GrokChatTest(unittest.TestCase):
         output, _ = rebuild(chat, updates)
         self.assertEqual(sum('Old question' in str(row) for row in output), 1)
         chat, updates = self.fixture()
+        bare_header = {'type': 'user', 'content': [{'type': 'text', 'text': 'Old question'}]}
+        chat.insert(2, bare_header)
+        output, _ = rebuild(chat, updates)
+        self.assertIn(bare_header, output)
+        chat, updates = self.fixture()
         interrupted = chat.pop(2)
         interrupted['prior_turn_interrupt'] = 'mid_turn_abort'
         interrupted['content'][0]['text'] = ('The user interrupted the previous turn:\n'

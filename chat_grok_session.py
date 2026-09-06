@@ -80,9 +80,12 @@ def rebuild(chat, updates, safe_tail_turns=1, archived_histories=()):
                 text = blocks[0].get('text', '') if isinstance(blocks, list) and len(blocks) == 1 else ''
                 summary = (row.get('synthetic_reason') == 'compaction_meta'
                            and text.startswith('This session is being continued from a previous conversation'))
-                original_query = any(text.removeprefix('<user_query>\n').removesuffix('\n</user_query>').rstrip()
-                                     == item.get('text', '').rstrip()
-                                     for item in original_queries)
+                wrapped_query = text.startswith('<user_query>\n') and text.endswith('\n</user_query>')
+                original_query = wrapped_query and any(
+                    text.removeprefix('<user_query>\n').removesuffix('\n</user_query>').rstrip()
+                    == item.get('text', '').rstrip()
+                    for item in original_queries
+                )
                 if not summary and not original_query:
                     header.append(row)
         elif row['type'] not in ('assistant', 'reasoning', 'tool_result'):
@@ -202,7 +205,7 @@ def build_candidate(source, output, safe_tail_turns=1):
         shutil.copytree(source, backup)
         if inventory(backup) != before or inventory(source) != before:
             raise ValueError('Source changed during backup; candidate not created')
-        report = finish_candidate(source, output, original, candidate, staging, before, metadata,
+        report = finish_candidate(source, original, candidate, staging, before, metadata,
                                   chat, updates, safe_tail_turns)
         staging.rename(output)
     finally:
@@ -211,7 +214,7 @@ def build_candidate(source, output, safe_tail_turns=1):
     return report
 
 
-def finish_candidate(source, output, original, final_candidate, staging, before, metadata,
+def finish_candidate(source, original, final_candidate, staging, before, metadata,
                      chat, updates, safe_tail_turns):
     candidate = staging / 'compacted' / source.name
     shutil.copytree(staging / 'original' / source.name, candidate)

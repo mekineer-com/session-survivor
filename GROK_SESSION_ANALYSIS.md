@@ -166,6 +166,11 @@ Rook has not been transformed or resumed for tests. Applying maintenance still
 requires him to exit and a verified candidate; retaining all auxiliary files
 deliberately favors continuity over maximum disk savings.
 
+Rook's nine retained compaction requests were checked after the 2026-09-06
+atomic-publication audit. Their indexed user ranges are contiguous and
+non-overlapping from 0 through 253; live chat continues from 254 through 308.
+This confirms prompt indices do not restart across his observed compactions.
+
 Local reference: ~/.grok/docs/user-guide/17-sessions.md. The older installed
 README disagrees with that guide on some CLI details; use the current help and
 synthetic behavior checks to resolve them.
