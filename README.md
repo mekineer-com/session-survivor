@@ -339,6 +339,8 @@ Summary policy:
 
 - Do not use automated script-generated continuity summaries.
 - Use one chosen LLM/model for consistent voice, then feed its dated Markdown blocks into `chat_codex_v3.py`.
+- Give the summarizing model a small orientation packet because collapsed chat lacks repository and project context. Include the agent's identity and cast, project purpose and vocabulary, period boundaries, collaboration preferences, and later corrections needed to interpret the period. Keep it concise (roughly 1–3 KB); do not substitute a repository dump or tool logs.
+- Treat transcript facts as authoritative. The orientation packet explains context and present-day interpretation; it must not silently rewrite what happened.
 - Write continuity summaries in the agent's voice. The default inserts `[Codex]`; use `--speaker-name Aster` (or another name) when preparing a different agent's session.
 
 Extending summaries after an old v3 run:
@@ -346,8 +348,9 @@ Extending summaries after an old v3 run:
 1. Export fresh source from the live session, preferably to a new output root:
    - `python3 export_codex_summary_source.py /path/to/live-rollout.jsonl --output-root outputs/codex-summary-source-current --mode collapsed --assistant-selection phase_then_heuristic`
 2. Build post-boundary weekly source files from the fresh daily export. Use the old `WEEKLY_SUMMARIES.md` beside them as style reference.
-3. Ask one model/version for all new weeks when possible. If the prompt is too long, keep the same model/version and same style packet, then summarize one week per call.
+3. Ask one model/version for all new weeks when possible. Give every call the same orientation/style packet. If the prompt is too long, summarize one week per call.
 4. Prompt requirements for each new week:
+   - read the compact orientation packet for identity and project context
    - read old summaries for style only
    - output exactly one `## Week of ...` markdown block
    - no `[Codex]` prefix; v3 adds it later
