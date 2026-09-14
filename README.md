@@ -72,6 +72,12 @@ Grok: exit the session first, then provide its directory and a NEW output direct
 python3 chat_grok_session.py /path/to/grok/session-uuid --output-root outputs/grok-maintenance-unique
 ```
 
+Read-only usage report (safe while Grok is open; defaults to the latest session):
+
+```sh
+python3 grok_usage_stats.py
+```
+
 This creates a full `original/` backup, `compacted/` candidate and `manifest.json`
 with per-file hashes. It never swaps the source. The default retains the newest
 complete native turn (`--safe-tail-turns 1`); older user/assistant dialogue is
