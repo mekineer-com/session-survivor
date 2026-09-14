@@ -12,6 +12,7 @@ class GrokUsageStatsTest(unittest.TestCase):
             "cost": 1.25, "incomplete": True, "context_window": 500_000,
             "chat_bytes": 1_250_000, "native_compactions": 2,
             "current_input": 250_000,
+            "usage_stale": False,
             "days": {"2026-01-02": {"turns": 2, "calls": 4,
                                       "input": 1_000_000, "cost": 12_500_000_000}},
             "worst": [{"turnNumber": 7, "modelCalls": 3, "inputTokens": 750_000,
@@ -23,6 +24,20 @@ class GrokUsageStatsTest(unittest.TestCase):
         self.assertIn("$1.25 (usage marked incomplete)", text)
         self.assertIn("Chat/native compactions: 1.25 MB / 2", text)
         self.assertIn("7: 3 calls", text)
+
+    def test_stale_usage_does_not_request_more_maintenance(self):
+        stats = {
+            "session_id": "synthetic", "first": None, "last": None,
+            "turns": 1, "calls": 1, "input": 250_000, "output": 10,
+            "cache_percent": 0, "cost": 0, "incomplete": False,
+            "chat_bytes": 100, "native_compactions": 0,
+            "context_window": 500_000, "current_input": 250_000,
+            "usage_stale": True, "days": {}, "worst": [], "prompts": {},
+        }
+        text = render(stats)
+        self.assertIn("Pre-maintenance prompt", text)
+        self.assertIn("Maintenance applied", text)
+        self.assertNotIn("Maintenance: worthwhile", text)
 
 
 if __name__ == "__main__":

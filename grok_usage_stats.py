@@ -52,6 +52,8 @@ def summarize(session, home):
     models = json.loads(models_path.read_text()).get("models", {}) if models_path.exists() else {}
     context_window = models.get(model_id, {}).get("info", {}).get("context_window")
     latest_single = next((turn for turn in reversed(turns) if turn["modelCalls"] == 1), None)
+    usage_stale = ((session / "chat_history.jsonl").stat().st_mtime
+                   > (session / "usage.json").stat().st_mtime)
 
     days = defaultdict(lambda: {"turns": 0, "calls": 0, "input": 0, "cost": 0})
     for turn in turns:
@@ -78,6 +80,7 @@ def summarize(session, home):
         "native_compactions": native_compactions,
         "context_window": context_window,
         "current_input": latest_single["inputTokens"] if latest_single else None,
+        "usage_stale": usage_stale,
         "days": dict(sorted(days.items())),
         "worst": sorted(turns, key=lambda turn: turn.get("costUsdTicks", 0), reverse=True)[:5],
         "prompts": prompts,
@@ -100,9 +103,12 @@ def render(stats):
     ])
     if stats["current_input"] and stats["context_window"]:
         percent = 100 * stats["current_input"] / stats["context_window"]
-        lines.append(f"Current prompt estimate: {stats['current_input'] / 1_000:.0f}k / "
+        label = "Pre-maintenance prompt" if stats["usage_stale"] else "Current prompt estimate"
+        lines.append(f"{label}: {stats['current_input'] / 1_000:.0f}k / "
                      f"{stats['context_window'] / 1_000:.0f}k tokens ({percent:.0f}%)")
-        if percent >= 40:
+        if stats["usage_stale"]:
+            lines.append("Maintenance applied; send one turn to measure the new prompt")
+        elif percent >= 40:
             lines.append("Maintenance: worthwhile after the session exits (prompt is at least 40% of window)")
     lines.append("\nBy day:")
     for day, values in stats["days"].items():
