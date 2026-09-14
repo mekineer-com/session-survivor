@@ -100,8 +100,10 @@ class GrokChatTest(unittest.TestCase):
             'Make sure to complete any unfinished tasks from previous turns.')
         output, _ = rebuild(chat, updates, archived_histories=[[interrupted]])
         self.assertIn(interrupted, output)
-        with self.assertRaisesRegex(ValueError, 'Missing native user row'):
-            rebuild(chat, updates)
+        output, _ = rebuild(chat, updates)
+        self.assertIn({'type': 'user', 'prompt_index': 0,
+                       'content': [{'type': 'text',
+                                    'text': '<user_query>\nOld question\n</user_query>'}]}, output)
 
     def test_utf8_and_failed_build_can_retry(self):
         from chat_grok_session import write_rows, read_rows

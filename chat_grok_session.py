@@ -40,6 +40,15 @@ def validate_tools(rows):
         raise ValueError('Unfinished tool calls in native tail')
 
 
+def user_row_from_update(event, prompt_index):
+    text = event['content']['text']
+    if not text.startswith('<system-reminder>') and not (
+            text.startswith('<user_query>\n') and text.endswith('\n</user_query>')):
+        text = f'<user_query>\n{text}\n</user_query>'
+    return {'type': 'user', 'content': [{'type': 'text', 'text': text}],
+            'prompt_index': prompt_index}
+
+
 def rebuild(chat, updates, safe_tail_turns=1, archived_histories=()):
     if safe_tail_turns < 1:
         raise ValueError('safe-tail-turns must be at least 1')
@@ -122,10 +131,7 @@ def rebuild(chat, updates, safe_tail_turns=1, archived_histories=()):
                 raise ValueError('Non-text dialogue requires a media-aware profile')
             text = content['text']
             if kind == 'user_message_chunk':
-                if current_index in native:
-                    history.append(native[current_index])
-                else:
-                    raise ValueError(f'Missing native user row {current_index}; preserve compaction request archives')
+                history.append(native.get(current_index) or user_row_from_update(event, current_index))
                 merge_assistant = False
             elif merge_assistant:
                 history[-1]['content'] += text

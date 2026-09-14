@@ -13,7 +13,7 @@ Default operator path:
 
 Current support:
 
-- Grok Build session directories (format v1, tested with 1.0.13)
+- Grok Build session directories (format v1, tested through 1.0.30)
   - `chat_grok_session.py`: verbatim old dialogue plus a native recent turn
   - offline backup/candidate only; see rewind limitation below
 - Codex JSONL
@@ -82,8 +82,9 @@ This creates a full `original/` backup, `compacted/` candidate and `manifest.jso
 with per-file hashes. It never swaps the source. The default retains the newest
 complete native turn (`--safe-tail-turns 1`); older user/assistant dialogue is
 uses native user records from current chat and retained `compaction_requests/`
-inputs, plus assistant text from `updates.jsonl`, with no text cap or generated
-summary. Missing native user records cause refusal rather than guessed framing.
+inputs, plus authoritative dialogue from `updates.jsonl`, with no text cap or
+generated summary. Grok 1.0.30 user rows removed by native compaction are rebuilt
+from their exact update text using the observed native query/reminder envelope.
 Old tool payloads and thought text in display updates are emptied while their
 record envelopes remain. Identity, prompt indices, timestamps, checkpoints,
 rewind records and auxiliary artifacts are retained. Total disk size therefore

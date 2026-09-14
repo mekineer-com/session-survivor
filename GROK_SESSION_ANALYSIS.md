@@ -174,3 +174,12 @@ This confirms prompt indices do not restart across his observed compactions.
 Local reference: ~/.grok/docs/user-guide/17-sessions.md. The older installed
 README disagrees with that guide on some CLI details; use the current help and
 synthetic behavior checks to resolve them.
+
+## Grok 1.0.30 repeated maintenance
+
+Grok 1.0.30 retained the latest native compaction as `compaction/segment_009.md`
+and a checkpoint, but no matching `compaction_requests/` archive. The live chat
+therefore began at prompt 354 while authoritative `updates.jsonl` still covered
+0 through 466. Repeated chat maintenance now reconstructs only missing indexed
+user rows from the exact update text and the observed native query/reminder
+envelope; archived native rows still take precedence.
