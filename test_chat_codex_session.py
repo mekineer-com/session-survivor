@@ -10,7 +10,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from chat_codex_session import compact_chat_records, compact_old_turn, main
+from chat_codex_session import compact_chat_records, compact_old_turn, is_continuity_summary_text, main
+from compact_codex_session import compact_record
 
 
 def candidate_fixture(root: Path):
@@ -64,16 +65,42 @@ def run_candidate(args) -> int:
 
 
 class ChatCodexSessionTest(unittest.TestCase):
+    def test_supported_continuity_summary_labels(self) -> None:
+        for text in ("[Codex]\n\n## Week of Jul 1-7", "[Aster]\n\n## Week of Jul 1-7",
+                     "## Period of Mar 21-May 30", "[Ari]\n\n## Period of Jun 1-30"):
+            self.assertTrue(is_continuity_summary_text(text))
+
+    def test_compacted_checkpoint_is_pruned_only_by_chat_policy(self) -> None:
+        history = [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "x" * 500}]}
+            for _ in range(12)
+        ]
+        anchor = {"type": "compacted", "payload": {"message": "memory", "replacement_history": history}}
+        with tempfile.TemporaryDirectory() as directory:
+            source, _, args, public_paths = candidate_fixture(Path(directory))
+            rows = [json.loads(line) for line in source.read_text().splitlines()]
+            rows.insert(-1, anchor)
+            source.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            run_candidate(args)
+            output = [json.loads(line) for line in public_paths[1].read_text().splitlines()]
+            kept = next(row for row in output if row.get("type") == "compacted")
+            self.assertEqual(len(kept["payload"]["replacement_history"]), 12)
+            self.assertEqual(kept["payload"]["replacement_history"][-1]["content"][0]["text"], "x" * 500)
+
+            call = {"type": "response_item", "payload": {"type": "function_call", "arguments": '{"value":"' + "x" * 500 + '"}'}}
+            compacted = compact_record(call, args, defaultdict(int))
+            json.loads(compacted["payload"]["arguments"])
+
     def test_failed_build_publishes_nothing_and_can_retry(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             _, output, args, public_paths = candidate_fixture(Path(directory))
 
             with patch("chat_codex_session.parse_args", return_value=args), patch(
-                "pathlib.Path.write_text", side_effect=OSError("synthetic disk failure")
+                "pathlib.Path.write_bytes", side_effect=OSError("synthetic disk failure")
             ), self.assertRaises(OSError):
                 main()
             self.assertFalse(any(path.exists() for path in public_paths))
-            self.assertEqual(list(output.glob(".codex-building-*")), [])
+            self.assertEqual(list(output.glob(".building-*")), [])
 
             self.assertEqual(run_candidate(args), 0)
             self.assertTrue(all(path.exists() for path in public_paths))
@@ -97,7 +124,7 @@ class ChatCodexSessionTest(unittest.TestCase):
                 run_candidate(args)
             self.assertEqual(replacements, 3)
             self.assertFalse(public_paths[-1].exists())
-            self.assertEqual(list(output.glob(".codex-building-*")), [])
+            self.assertEqual(list(output.glob(".building-*")), [])
 
             self.assertEqual(run_candidate(args), 0)
             self.assertTrue(all(path.exists() for path in public_paths))

@@ -24,6 +24,7 @@ class ChatRow:
     exchange_id: int
     phase: str
     text: str
+    turn_start: datetime | None = None
 
 
 PROGRESS_ONLY_PATTERNS = (
@@ -147,12 +148,14 @@ def relative_output_path(path: pathlib.Path) -> pathlib.Path:
 def collect_rows(source: pathlib.Path) -> list[ChatRow]:
     rows: list[ChatRow] = []
     turn_id = 0
+    turn_start: datetime | None = None
     with source.open("r", encoding="utf-8") as handle:
         for line in handle:
             obj = json.loads(line)
             if obj.get("type") == "event_msg":
                 if obj.get("payload", {}).get("type") == "task_started":
                     turn_id += 1
+                    turn_start = parse_ts(str(obj.get("timestamp") or ""))
                 continue
             if obj.get("type") != "response_item":
                 continue
@@ -171,7 +174,17 @@ def collect_rows(source: pathlib.Path) -> list[ChatRow]:
             if not text:
                 continue
             phase = str(payload.get("phase") or "")
-            rows.append(ChatRow(ts=ts, role=role, turn_id=turn_id, exchange_id=0, phase=phase, text=text))
+            rows.append(
+                ChatRow(
+                    ts=ts,
+                    role=role,
+                    turn_id=turn_id,
+                    exchange_id=0,
+                    phase=phase,
+                    text=text,
+                    turn_start=turn_start,
+                )
+            )
     rows.sort(key=lambda r: r.ts)
     assign_exchange_ids(rows)
     return rows
@@ -204,6 +217,7 @@ def collapse_rows(rows: list[ChatRow], assistant_selection: str) -> tuple[list[C
         users = [r for r in items if r.role == "user"]
         assistants = [r for r in items if r.role == "assistant"]
         turn_id = max((r.turn_id for r in items), default=0)
+        turn_start = next((r.turn_start for r in items if r.turn_start is not None), None)
 
         if users:
             user_text = "\n\n".join(r.text for r in users).strip()
@@ -216,6 +230,7 @@ def collapse_rows(rows: list[ChatRow], assistant_selection: str) -> tuple[list[C
                         exchange_id=exchange_id,
                         phase="",
                         text=user_text,
+                        turn_start=turn_start,
                     )
                 )
 
@@ -249,6 +264,7 @@ def collapse_rows(rows: list[ChatRow], assistant_selection: str) -> tuple[list[C
                     exchange_id=exchange_id,
                     phase=final_assistant.phase,
                     text=final_assistant.text,
+                    turn_start=turn_start,
                 )
             )
 
@@ -294,9 +310,16 @@ def write_exports(
     dest_dir = output_root / rel.with_suffix("")
     dest_dir.mkdir(parents=True, exist_ok=True)
 
+    group_starts: dict[int, datetime] = {}
+    for row in export_rows:
+        if row.turn_id > 0:
+            start = row.turn_start or row.ts
+            group_starts[row.turn_id] = min(group_starts.get(row.turn_id, start), start)
+
     by_day: dict[str, list[ChatRow]] = {}
     for row in export_rows:
-        key = row.ts.date().isoformat()
+        start = group_starts[row.turn_id] if row.turn_id > 0 else row.ts
+        key = start.date().isoformat()
         by_day.setdefault(key, []).append(row)
 
     day_keys = sorted(by_day.keys())
@@ -317,6 +340,7 @@ def write_exports(
             index_lines.append(
                 f"- phase_only assistant rows dropped: `{mode_stats['phase_only_assistant_rows_dropped']}`"
             )
+    index_lines.append("- Day policy: keep each native turn together under its start day (UTC).")
     index_lines.append("- Turn label policy: use native turn id when present; otherwise use exchange id.")
     index_lines.append("")
     index_lines.append("## Read Order")

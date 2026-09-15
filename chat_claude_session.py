@@ -12,10 +12,10 @@ import uuid
 from types import SimpleNamespace
 from typing import Any
 
+from artifact_publish import publish_artifacts
 from compact_claude_session import (
     backfill_assistant_models,
     compact_record as compact_native_record,
-    publish_artifacts,
     validate_claude_records,
 )
 from lineage import build_compaction_manifest

@@ -204,6 +204,8 @@ Session markers:
 - `chat_codex_v3.py`
   - dated-summary-driven Codex continuity rewrite (consumes LLM-authored summaries)
   - parses `## Week of ...` and `## Period of ...` blocks, replacing matched old turn ranges with synthetic user-message summary turns
+  - refuses empty/overlapping summaries and non-contiguous date mappings
+  - `--dry-run-only` writes nothing
   - keeps newest `--safe-tail-turns` turns, except compacted `replacement_history` is stripped so weekly summaries become visible on resume
   - writes candidate output only (no live swap automation)
   - supports `--latest`, `--summary-file`, `--speaker-name`, `--dry-run-only`, `--show-summary`, and `--show-lineage`
@@ -267,6 +269,7 @@ Use this order:
 - emits one user/final-assistant replay pair per old turn for current Codex TUI history
 - keeps old-history compacted rows with readable summary text
 - keeps the newest old-history compacted checkpoint row, but prunes non-summary `replacement_history` user-message bulk by default
+- lets the chat-specific checkpoint policy prune native-tail checkpoints; generic safe trimming never cuts them first
 - strips older old-history `payload.replacement_history` because it is superseded bulk
 - keeps a native safe-compacted recent tail (`--safe-tail-turns`, default `1`)
 - max chat message cap defaults to `--max-message-chars 20000` (to avoid truncating weekly-summary blocks)
@@ -277,7 +280,7 @@ Use this order:
 - tail compaction knobs: `--max-tool-input-chars`, `--max-reasoning-chars`
 - source selection rule: use exactly one source (`--latest` or explicit path)
 - refuses when an explicit source would resolve onto one of its own output paths; use a different `--output-root` for candidate-of-candidate work
-- builds and validates backup, candidate, report, and manifest in a private `.codex-building-*` directory; removes any old manifest before replacing files and publishes the new manifest last
+- builds backup, candidate, report, and manifest privately under a per-output lock; removes any old manifest before replacing files and publishes the new manifest last
 - the manifest is the completion seal: without it, artifacts may be absent or mixed across an interrupted rerun and must not be used
 - usage:
   - `python3 chat_codex_session.py --latest --show-summary`
@@ -306,6 +309,7 @@ Pre-boundary guard:
 Why this flow:
 
 - `chat_codex_v3.py` preserves continuity by replacing long raw history with week summaries.
+- summary source keeps each native turn together under its UTC start day, including cross-midnight answers.
 - `chat_codex_v3.py` strips compacted `replacement_history` so Codex rebuilds memory from the inserted summaries; the next native compact creates a fresh checkpoint.
 - `chat_codex_session.py` keeps the newest native checkpoint shape, prunes non-summary user-message bulk from `replacement_history`, strips older checkpoint bulk, and preserves readable compacted messages.
 

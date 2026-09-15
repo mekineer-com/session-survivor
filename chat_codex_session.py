@@ -6,11 +6,11 @@ import argparse
 import hashlib
 import json
 import pathlib
-import shutil
+import re
 import sys
-import tempfile
 from typing import Any
 
+from artifact_publish import publish_artifacts
 from compact_codex_session import MAX_COMPACTED_REPLACEMENT_HISTORY, compact_record, core_format_warnings
 from lineage import build_compaction_manifest, describe_lineage
 
@@ -21,6 +21,7 @@ PLACEHOLDER = "[Compacted Codex chat message"
 MAX_PRE_BOUNDARY_HEADER_BYTES = 512_000
 MAX_PRE_BOUNDARY_HEADER_RECORDS = 128
 DEFAULT_REPLACEMENT_HISTORY_USER_MESSAGES = 50
+CONTINUITY_SUMMARY_RE = re.compile(r"^(?:\[[^\]\r\n]+\]\s*)?## (?:Week|Period) of ")
 
 
 def parse_args() -> argparse.Namespace:
@@ -112,14 +113,6 @@ def shorten(text: str, max_chars: int) -> tuple[str, bool]:
     return compacted, True
 
 
-def validate_jsonl(path: pathlib.Path) -> dict[str, int]:
-    line_count = 0
-    with path.open("r", encoding="utf-8") as handle:
-        for line_count, line in enumerate(handle, 1):
-            json.loads(line)
-    return {"line_count": line_count}
-
-
 def validate_jsonl_bytes(data: bytes) -> dict[str, int]:
     line_count = 0
     for line_count, line in enumerate(data.splitlines(), 1):
@@ -188,10 +181,7 @@ def extract_message_text(content: Any) -> str:
 
 
 def is_continuity_summary_text(text: str) -> bool:
-    text = text.lstrip()
-    if text.startswith("[Codex]"):
-        text = text[len("[Codex]") :].lstrip()
-    return text.startswith("## Week of ")
+    return bool(CONTINUITY_SUMMARY_RE.match(text.lstrip()))
 
 
 def prune_compacted_replacement_history(
@@ -621,9 +611,10 @@ def main() -> int:
     safe_tail_rows: list[dict[str, Any]] = []
     for turn in tail_turns:
         for obj in turn:
-            row = compact_record(obj, args, safe_tail_state)
-            if row.get("type") == "compacted":
-                row = prune_compacted_replacement_history(row, args, state)
+            if obj.get("type") == "compacted":
+                row = prune_compacted_replacement_history(obj, args, state)
+            else:
+                row = compact_record(obj, args, safe_tail_state)
             safe_tail_rows.append(row)
 
     state["kept_safe_tail_records"] = len(safe_tail_rows)
@@ -732,39 +723,18 @@ def main() -> int:
         "token_usage_record",
         "compacted",
     ]
-    output_root.mkdir(parents=True, exist_ok=True)
-    staging = pathlib.Path(tempfile.mkdtemp(prefix=".codex-building-", dir=output_root))
-    staged_paths = {
-        original_copy: staging / "original" / rel,
-        compacted_copy: staging / "compacted" / rel,
-        report_path: staging / "reports" / rel.with_suffix(".report.json"),
-        manifest_path: staging / "manifests" / rel.with_suffix(".manifest.json"),
-    }
-    try:
-        for path in staged_paths.values():
-            path.parent.mkdir(parents=True, exist_ok=True)
-        staged_paths[original_copy].write_bytes(original_bytes)
-        staged_paths[compacted_copy].write_bytes(compacted_bytes)
-        staged_paths[report_path].write_text(
-            json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
-        staged_paths[manifest_path].write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
-
-        validate_jsonl(staged_paths[original_copy])
-        validate_jsonl(staged_paths[compacted_copy])
-        json.loads(staged_paths[report_path].read_text(encoding="utf-8"))
-        json.loads(staged_paths[manifest_path].read_text(encoding="utf-8"))
-        if source.read_bytes() != original_bytes:
-            raise RuntimeError("Source changed during candidate generation; outputs were not published.")
-
-        manifest_path.unlink(missing_ok=True)
-        for final_path in (original_copy, compacted_copy, report_path, manifest_path):
-            final_path.parent.mkdir(parents=True, exist_ok=True)
-            staged_paths[final_path].replace(final_path)
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
+    publish_artifacts(
+        source,
+        original_bytes,
+        output_root,
+        [
+            (original_copy, original_bytes),
+            (compacted_copy, compacted_bytes),
+            (report_path, (json.dumps(report, indent=2, ensure_ascii=False) + "\n").encode("utf-8")),
+            (manifest_path, (json.dumps(manifest, indent=2, ensure_ascii=False) + "\n").encode("utf-8")),
+        ],
+        manifest_path,
+    )
 
     if args.show_summary:
         print(

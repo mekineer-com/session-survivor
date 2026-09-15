@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import tempfile
 import unittest
 
+from artifact_publish import publish_artifacts
 from chat_claude_session import (
     active_branch_records,
     compact_chat_records,
@@ -16,7 +17,6 @@ from compact_claude_session import (
     backfill_assistant_models,
     compact_file_history_snapshot,
     compact_record,
-    publish_artifacts,
     validate_claude_records,
 )
 
@@ -126,7 +126,7 @@ class ClaudeSessionTest(unittest.TestCase):
             source = root / "source.jsonl"
             source.write_text('{}\n')
             manifest = root / "manifest.json"
-            lock = (root / ".claude-publish.lock").open("w")
+            lock = (root / ".session-survivor-publish.lock").open("w")
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             try:
                 with self.assertRaisesRegex(RuntimeError, "publication is running"):

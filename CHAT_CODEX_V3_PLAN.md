@@ -7,7 +7,7 @@ Build `chat_codex_v3.py` that consumes `WEEKLY_SUMMARIES.md` directly and prepar
 1. Parse weekly blocks from `WEEKLY_SUMMARIES.md` as-is (no forced reformat).
 2. Map each week block to date boundaries.
 3. Locate matching turn ranges in source session by timestamp.
-4. Emit a dry-run report plus a transformed output file candidate.
+4. Preview with a no-write dry run, then emit a transformed candidate.
 
 ## Explicit Non-Goals (this pass)
 - No live swap into active session file.
@@ -53,7 +53,7 @@ Build `chat_codex_v3.py` that consumes `WEEKLY_SUMMARIES.md` directly and prepar
 - Preserve chronological order.
 - Ensure each inserted summary turn has start/complete boundaries.
 - Preserve compacted row shells/messages while removing only `replacement_history`.
-- Refuse write if no weeks parsed or no turns matched (unless `--force-empty-map`).
+- Refuse write if no weeks are parsed or no turns match.
 
 ## CLI Design (initial)
 - `chat_codex_v3.py SESSION_PATH --summary-file WEEKLY_SUMMARIES.md`
@@ -75,7 +75,7 @@ Build `chat_codex_v3.py` that consumes `WEEKLY_SUMMARIES.md` directly and prepar
 ## Current Nuance
 - Native Codex compaction carries readable user messages forward inside `replacement_history`, while assistant history can disappear into an encrypted/non-readable compaction item.
 - v3 summaries are therefore inserted as `[Codex]` user-message rows, not assistant rows.
-- `chat_codex_session.py` protects `[Codex]` weekly summaries and prunes ordinary old user-message bulk from `replacement_history`, keeping the newest checkpoint shape plus the last 50 ordinary user messages by default.
+- `chat_codex_session.py` protects named Week/Period summaries and prunes ordinary old user-message bulk from `replacement_history`, keeping the newest checkpoint shape plus the last 50 ordinary user messages by default.
 - For new summary batches, use one Grok session/model for consistency. If one prompt is too large, resume the same Grok session with the same style reference.
 
 ## Next Run: Aster

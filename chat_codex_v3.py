@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
 
+from artifact_publish import publish_artifacts
 from compact_codex_session import core_format_warnings
 from lineage import build_compaction_manifest, describe_lineage
 
@@ -129,11 +130,6 @@ def parse_args() -> argparse.Namespace:
         "--dry-run-only",
         action="store_true",
         help="Do not write compacted/manifests; print report only.",
-    )
-    parser.add_argument(
-        "--force-empty-map",
-        action="store_true",
-        help="Allow output when weeks parse but no turns match date ranges.",
     )
     parser.add_argument(
         "--show-summary",
@@ -382,14 +378,21 @@ def parse_weekly_summaries(summary_text: str, anchor_year: int) -> list[WeekBloc
     weeks: list[WeekBlock] = []
     current_year = anchor_year
     previous_start: date | None = None
+    previous_end: date | None = None
     for idx, (heading, body_lines) in enumerate(blocks):
         raw = SUMMARY_HEADER_RE.match(heading).group(1)
         start, end, current_year = parse_week_range(raw, current_year, previous_start)
+        body = "\n".join(body_lines).strip()
+        if not body:
+            raise ValueError(f"Summary block must have a non-empty body: {heading}")
+        if previous_end is not None and start <= previous_end:
+            raise ValueError(f"Summary ranges overlap or are out of order at: {heading}")
         previous_start = start
+        previous_end = end
         weeks.append(
             WeekBlock(
                 heading=heading,
-                body="\n".join(body_lines).strip(),
+                body=body,
                 start=start,
                 end=end,
                 index=idx,
@@ -576,6 +579,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             continue
         first_pos = min(week_positions)
         last_pos = max(week_positions)
+        covered_positions = [
+            pos for pos in range(first_pos, last_pos + 1) if old_units[pos].matchable
+        ]
+        if covered_positions != week_positions:
+            raise SystemExit(f"Summary range is not contiguous in session order: {week.heading}")
         rows_removed = sum(len(old_units[pos].rows) for pos in week_positions)
         week_matches.append(
             {
@@ -592,11 +600,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         week_by_start_position[first_pos] = (week, first_pos, last_pos)
         matched_positions.update(week_positions)
 
-    if not matched_positions and not args.force_empty_map:
-        raise SystemExit(
-            "No old-history turns matched summary week ranges. "
-            "Use --force-empty-map to proceed anyway."
-        )
+    if not matched_positions:
+        raise SystemExit("No old-history turns matched summary week ranges.")
 
     rebuilt_old_rows: list[dict[str, Any]] = []
     i = 0
@@ -622,6 +627,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     out_rows, stripped_replacement_history = strip_compacted_replacement_history(out_rows)
     if not out_rows:
         raise SystemExit("Refusing to write empty output.")
+    if inserted_week_summaries != sum(match["matched_turns"] > 0 for match in week_matches):
+        raise SystemExit("Parsed summary mappings were not inserted exactly once.")
 
     compacted_bytes = b"".join(
         (json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
@@ -629,12 +636,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     compacted_validation = validate_jsonl_bytes(compacted_bytes)
     compacted_sha256 = sha256_bytes(compacted_bytes)
-
-    original_copy.parent.mkdir(parents=True, exist_ok=True)
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    compacted_copy.parent.mkdir(parents=True, exist_ok=True)
-    original_copy.write_bytes(original_bytes)
 
     generated_at = None
     for row in reversed(out_rows):
@@ -693,7 +694,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             )
 
     if not args.dry_run_only:
-        compacted_copy.write_bytes(compacted_bytes)
         manifest = build_compaction_manifest(
             source=source,
             original_copy=original_copy,
@@ -715,10 +715,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         manifest["policy"]["safe_tail_turns"] = args.safe_tail_turns
         manifest["policy"]["synthetic_week_turn_rows"] = 3
         manifest["policy"]["compacted_replacement_history"] = "stripped_to_activate_visible_weekly_summaries"
-        manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         manifest_path_value = str(manifest_path)
-    report["manifest_path"] = manifest_path_value
-    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        report["manifest_path"] = manifest_path_value
+        publish_artifacts(
+            source,
+            original_bytes,
+            output_root,
+            [
+                (original_copy, original_bytes),
+                (compacted_copy, compacted_bytes),
+                (report_path, (json.dumps(report, indent=2, ensure_ascii=False) + "\n").encode("utf-8")),
+                (manifest_path, (json.dumps(manifest, indent=2, ensure_ascii=False) + "\n").encode("utf-8")),
+            ],
+            manifest_path,
+        )
     return report
 
 

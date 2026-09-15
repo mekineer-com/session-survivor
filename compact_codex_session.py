@@ -830,12 +830,7 @@ def compact_response_item(payload: dict, args: argparse.Namespace, state: dict[s
         return
 
     if payload_type == "function_call":
-        arguments = payload.get("arguments")
-        if isinstance(arguments, str):
-            arguments, changed = shorten(arguments, args.max_tool_input_chars, PATCH_PLACEHOLDER)
-            payload["arguments"] = arguments
-            if changed:
-                state["tool_inputs_truncated"] += 1
+        # Arguments are JSON; text truncation makes them unparsable on resume.
         return
 
     if payload_type != "message":
