@@ -109,8 +109,10 @@ ACP flow. Rewind points still load; no workaround or checkpoint deletion is appl
 Details: [GROK_SESSION_ANALYSIS.md](GROK_SESSION_ANALYSIS.md).
 
 When verbatim Grok chat still consumes too much model context, use authored
-tiered summaries. The exporter starts at the first native prompt still present,
-so later runs do not export periods already summarized:
+tiered summaries. Before v3, the exporter includes all authoritative updates
+even after native compaction. After v3, it starts at the first native prompt so
+periods already summarized are not exported again. Complete turns are grouped
+under their initiating prompt's UTC date, including answers after midnight:
 
 ```sh
 python3 export_grok_summary_source.py /path/to/closed/grok/session \

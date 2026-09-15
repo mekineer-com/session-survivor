@@ -186,8 +186,9 @@ envelope; archived native rows still take precedence.
 
 ## Tiered authored summaries
 
-`export_grok_summary_source.py` exports the authoritative user/assistant display
-dialogue by UTC day, beginning at the first indexed prompt still present in the
+`export_grok_summary_source.py` exports authoritative user/assistant display
+dialogue by the initiating prompt's UTC day. Before v3 it includes all updates;
+after a recognized v3 summary it begins at the first indexed prompt still in
 model chat. `chat_grok_v3.py` replaces only a contiguous oldest-prompt prefix
 with externally authored `## Week/Period of ...` summaries. Recent unmatched
 prompts and the native safe tail stay verbatim. Display dialogue, checkpoints,

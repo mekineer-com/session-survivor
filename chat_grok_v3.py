@@ -64,6 +64,8 @@ def apply_summaries(chat, updates, summary_text, speaker='Rook', safe_tail_turns
     blocks = parse_weekly_summaries(summary_text, anchor_year)
     if not blocks:
         raise ValueError('No "## Week/Period of ..." summary blocks found')
+    if any(not block.body.strip() for block in blocks):
+        raise ValueError('Every summary block must have a non-empty body')
 
     old = turns[:-safe_tail_turns]
     tail = turns[-safe_tail_turns:]
