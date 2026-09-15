@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import pathlib
 import re
 import sys
@@ -13,8 +12,13 @@ import uuid
 from types import SimpleNamespace
 from typing import Any
 
-from compact_claude_session import compact_record as compact_native_record
-from lineage import build_compaction_manifest, describe_lineage
+from compact_claude_session import (
+    backfill_assistant_models,
+    compact_record as compact_native_record,
+    publish_artifacts,
+    validate_claude_records,
+)
+from lineage import build_compaction_manifest
 
 
 DEFAULT_OUTPUT_ROOT = pathlib.Path("/home/marcos/apps-codex/session-survivor/outputs/claude-chat-resume")
@@ -26,7 +30,6 @@ COMMAND_WRAPPER_RE = re.compile(
     re.DOTALL,
 )
 CONTINUATION_SUMMARY_PREFIX = "This session is being continued from a previous conversation that ran out of context."
-ASSISTANT_MODEL_FALLBACK = "claude-sonnet-4-6"
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,11 +74,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print only a compact summary JSON to stdout.",
     )
-    parser.add_argument(
-        "--show-lineage",
-        action="store_true",
-        help="Print lineage/provenance information for the input session and exit.",
-    )
     return parser.parse_args()
 
 
@@ -100,14 +98,6 @@ def shorten(text: str, max_chars: int) -> tuple[str, bool]:
     return compacted, True
 
 
-def validate_jsonl(path: pathlib.Path) -> dict[str, int]:
-    line_count = 0
-    with path.open("r", encoding="utf-8") as handle:
-        for line_count, line in enumerate(handle, 1):
-            json.loads(line)
-    return {"line_count": line_count}
-
-
 def validate_jsonl_bytes(data: bytes) -> dict[str, int]:
     line_count = 0
     for line_count, line in enumerate(data.splitlines(), 1):
@@ -121,44 +111,6 @@ def relative_output_path(path: pathlib.Path) -> pathlib.Path:
         idx = parts.index(".claude")
         return pathlib.Path(*parts[idx + 1 :])
     return pathlib.Path(path.name)
-
-
-def write_thread_marker(
-    source: pathlib.Path,
-    compacted_copy: pathlib.Path,
-    report_path: pathlib.Path,
-    manifest_path: pathlib.Path,
-    profile: str,
-    source_sha256: str,
-) -> pathlib.Path:
-    marker_root = pathlib.Path.home() / ".claude" / "session-survivor"
-    marker_path = marker_root / "thread-markers.jsonl"
-    marker_key_dir = marker_root / "thread-marker-keys"
-    marker_root.mkdir(parents=True, exist_ok=True)
-    marker_key_dir.mkdir(parents=True, exist_ok=True)
-
-    session_id = source.stem
-    dedup_key = f"{session_id}:{source_sha256}:{profile}"
-    key_hash = hashlib.sha256(dedup_key.encode("utf-8")).hexdigest()
-    key_path = marker_key_dir / key_hash
-    if key_path.exists():
-        return marker_path
-
-    marker = {
-        "dedup_key": dedup_key,
-        "session_id": session_id,
-        "profile": profile,
-        "source_sha256": source_sha256,
-        "source": str(source),
-        "compacted_copy": str(compacted_copy),
-        "report_path": str(report_path),
-        "manifest_path": str(manifest_path),
-        "host": os.uname().nodename,
-    }
-    with marker_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(marker, ensure_ascii=False, separators=(",", ":")) + "\n")
-    key_path.write_text(dedup_key + "\n", encoding="utf-8")
-    return marker_path
 
 
 def extract_message_text(content: Any) -> str:
@@ -248,6 +200,8 @@ def chat_envelope_fields(obj: dict[str, Any], defaults: dict[str, str]) -> dict[
         "gitBranch",
         "slug",
         "permissionMode",
+        "isVisibleInTranscriptOnly",
+        "isMeta",
     )
     out: dict[str, Any] = {}
     for key in keep_fields:
@@ -269,8 +223,40 @@ def is_user_turn_start(obj: dict[str, Any]) -> bool:
     message = obj.get("message")
     if not isinstance(message, dict) or message.get("role") != "user":
         return False
-    text = extract_message_text(message.get("content"))
+    content = message.get("content")
+    if isinstance(content, list) and any(
+        isinstance(block, dict) and block.get("type") == "tool_result" for block in content
+    ):
+        return False
+    text = extract_message_text(content)
     return bool(text and not is_meta_noise(text) and not is_continuation_summary(text))
+
+
+def active_branch_records(records: list[dict[str, Any]], state: dict[str, int]) -> list[dict[str, Any]]:
+    by_uuid: dict[str, dict[str, Any]] = {}
+    for row in records:
+        row_uuid = row.get("uuid")
+        if not isinstance(row_uuid, str) or not row_uuid:
+            continue
+        if row_uuid in by_uuid:
+            raise ValueError(f"Duplicate Claude UUID: {row_uuid}")
+        by_uuid[row_uuid] = row
+
+    leaf = next((row for row in reversed(records) if row.get("uuid") in by_uuid), None)
+    if leaf is None:
+        return records
+    active: set[str] = set()
+    row = leaf
+    while isinstance(row, dict):
+        row_uuid = row.get("uuid")
+        if not isinstance(row_uuid, str) or not row_uuid or row_uuid in active:
+            break
+        active.add(row_uuid)
+        row = by_uuid.get(row.get("parentUuid"))
+
+    selected = [row for row in records if not row.get("uuid") or row.get("uuid") in active]
+    state["dropped_inactive_branch_records"] = len(records) - len(selected)
+    return selected
 
 
 def safe_tail_start_index(records: list[dict[str, Any]], tail_turns: int) -> int:
@@ -307,7 +293,6 @@ def compact_native_tail_records(
     tail_state = {
         "thinking_blocks_removed": 0,
         "tool_outputs_truncated": 0,
-        "message_content_truncated": 0,
         "local_command_truncated": 0,
         "message_usage_compacted": 0,
         "file_history_snapshots_compacted": 0,
@@ -331,7 +316,6 @@ def compact_native_tail_records(
 
     state["safe_tail_thinking_blocks_removed"] = tail_state["thinking_blocks_removed"]
     state["safe_tail_tool_outputs_truncated"] = tail_state["tool_outputs_truncated"]
-    state["safe_tail_message_content_truncated"] = tail_state["message_content_truncated"]
     state["safe_tail_local_command_truncated"] = tail_state["local_command_truncated"]
     state["safe_tail_message_usage_compacted"] = tail_state["message_usage_compacted"]
     state["safe_tail_file_history_snapshots_compacted"] = tail_state["file_history_snapshots_compacted"]
@@ -390,7 +374,9 @@ def compact_chat_records(
 
         compact_summary = bool(obj.get("isCompactSummary")) or is_continuation_summary(text)
 
-        text, changed = shorten(text, args.max_message_chars)
+        changed = False
+        if not compact_summary:
+            text, changed = shorten(text, args.max_message_chars)
         if changed:
             state["messages_truncated"] += 1
 
@@ -420,7 +406,8 @@ def compact_chat_records(
         }
         if role == "assistant":
             model = message.get("model")
-            row["message"]["model"] = model if isinstance(model, str) and model else ASSISTANT_MODEL_FALLBACK
+            if isinstance(model, str) and model:
+                row["message"]["model"] = model
         if compact_summary:
             row["isCompactSummary"] = True
             row["isVisibleInTranscriptOnly"] = True
@@ -456,10 +443,6 @@ def main() -> int:
     if not source.exists():
         raise SystemExit(f"Session file not found: {source}")
 
-    if args.show_lineage:
-        print(json.dumps(describe_lineage(source), indent=2, ensure_ascii=False))
-        return 0
-
     output_root = pathlib.Path(args.output_root).expanduser().resolve()
     rel = relative_output_path(source)
     original_copy = output_root / "original" / rel
@@ -468,15 +451,10 @@ def main() -> int:
     manifest_path = output_root / "manifests" / rel.with_suffix(".manifest.json")
 
     original_bytes = source.read_bytes()
-    original_copy.parent.mkdir(parents=True, exist_ok=True)
-    compacted_copy.parent.mkdir(parents=True, exist_ok=True)
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    original_copy.write_bytes(original_bytes)
-
     original_sha256 = sha256_bytes(original_bytes)
     original_validation = validate_jsonl_bytes(original_bytes)
     records = [json.loads(line) for line in original_bytes.splitlines()]
+    validate_claude_records(records)
 
     state = {
         "kept_chat_records": 0,
@@ -493,11 +471,13 @@ def main() -> int:
         "safe_tail_parent_rewritten": 0,
         "safe_tail_thinking_blocks_removed": 0,
         "safe_tail_tool_outputs_truncated": 0,
-        "safe_tail_message_content_truncated": 0,
         "safe_tail_local_command_truncated": 0,
         "safe_tail_message_usage_compacted": 0,
         "safe_tail_file_history_snapshots_compacted": 0,
+        "dropped_inactive_branch_records": 0,
+        "assistant_models_backfilled": 0,
     }
+    records = active_branch_records(records, state)
     tail_start = safe_tail_start_index(records, args.safe_tail_turns)
     old_records = records[:tail_start]
     tail_records = records[tail_start:]
@@ -508,16 +488,15 @@ def main() -> int:
     safe_tail = compact_native_tail_records(tail_records, tail_parent_uuid, args, state)
     state["kept_safe_tail_records"] = len(safe_tail)
     compacted.extend(safe_tail)
-    if not compacted:
-        raise SystemExit("No chat records survived filtering; refusing to write empty resume file.")
+    state["assistant_models_backfilled"] = backfill_assistant_models(compacted, records)
+    validate_claude_records(compacted)
     warnings: list[str] = []
 
-    with compacted_copy.open("w", encoding="utf-8") as dst:
-        for row in compacted:
-            dst.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
-
-    compacted_validation = validate_jsonl(compacted_copy)
-    compacted_bytes = compacted_copy.read_bytes()
+    compacted_bytes = b"".join(
+        (json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        for row in compacted
+    )
+    compacted_validation = validate_jsonl_bytes(compacted_bytes)
     compacted_sha256 = sha256_bytes(compacted_bytes)
     generated_at = compacted[-1].get("timestamp") if compacted else None
 
@@ -568,18 +547,20 @@ def main() -> int:
     manifest["policy"]["safe_tail_turns"] = args.safe_tail_turns
     manifest["policy"]["max_tail_tool_output_chars"] = args.max_tail_tool_output_chars
     manifest["policy"]["max_tail_file_history_entries"] = args.max_tail_file_history_entries
-    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
-    marker_path = write_thread_marker(
-        source=source,
-        compacted_copy=compacted_copy,
-        report_path=report_path,
-        manifest_path=manifest_path,
-        profile="claude-chat-resume",
-        source_sha256=original_sha256,
+    report_bytes = (json.dumps(report, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    manifest_bytes = (json.dumps(manifest, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    publish_artifacts(
+        source,
+        original_bytes,
+        output_root,
+        [
+            (original_copy, original_bytes),
+            (compacted_copy, compacted_bytes),
+            (report_path, report_bytes),
+            (manifest_path, manifest_bytes),
+        ],
+        manifest_path,
     )
-    report["thread_marker_path"] = str(marker_path)
-    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     if args.show_summary:
         print(

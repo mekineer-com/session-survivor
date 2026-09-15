@@ -24,7 +24,6 @@ Current support:
   - `safe`
   - `chat-resume`
   - `--show-summary`
-  - `--show-lineage`
 - Codex JSONL
   - `chat-resume-hybrid-safe-tail`
   - `chat-v3-weekly-summary` (LLM-authored summaries only)
@@ -142,14 +141,13 @@ Codex `safe` + `resume` profile reproduction (advanced):
 Claude `safe` profile reproduction (advanced):
 
 ```sh
-./reproduce_claude_safe.sh --latest
+./reproduce_claude_safe.sh /path/to/closed-claude-session.jsonl
 ```
 
 Inspect lineage/provenance for a compacted file:
 
 ```sh
 python3 compact_codex_session.py --show-lineage /path/to/session.jsonl
-python3 compact_claude_session.py --show-lineage /path/to/session.jsonl
 ```
 
 Run one-off compaction directly:
@@ -162,9 +160,6 @@ python3 chat_codex_v3.py --latest --summary-file /path/to/WEEKLY_SUMMARIES.md --
 python3 compact_claude_session.py /path/to/claude.jsonl
 python3 chat_claude_session.py /path/to/claude.jsonl
 python3 compact_gemini_session.py /path/to/gemini-session.json
-
-# Claude safe depth controls (optional overrides)
-python3 compact_claude_session.py /path/to/claude.jsonl --warn-depth 8 --max-depth 12
 ```
 
 Safe forensics workflow (Codex stuck / context-rot investigation):
@@ -188,10 +183,9 @@ python3 compact_codex_session.py --profile safe /path/to/rollout-*.jsonl.freeze
 Session markers:
 
 - Codex: when `CODEX_THREAD_ID` is present, `compact_codex_session.py` appends a marker line to `~/.codex/session-survivor/thread-markers.jsonl`.
-- Claude: `compact_claude_session.py` appends markers to `~/.claude/session-survivor/thread-markers.jsonl`.
 - Gemini: `compact_gemini_session.py` appends markers to `~/.gemini/session-survivor/thread-markers.jsonl`.
 - Marker writes are de-duped by `{session_or_thread_id}:{source_sha256}:{profile}`.
-- Each report now includes `thread_marker_path`.
+- Marker-producing reports include `thread_marker_path`.
 - In `resume` profile, synthetic compacted turn IDs are deterministic for same input/options.
 - Report compatibility alias: top-level `profile` is emitted (mirrors `policy.profile`).
 - Format-drift warnings: when core Codex record shapes are missing, warnings are emitted to stderr and included as `warnings[]` in the report.
@@ -215,12 +209,12 @@ Session markers:
   - supports `--latest`, `--summary-file`, `--speaker-name`, `--dry-run-only`, `--show-summary`, and `--show-lineage`
 - `compact_claude_session.py`
   - legacy/advanced conservative Claude compactor
-  - currently `safe` only, plus `--show-summary` and `--show-lineage`
+  - currently `safe` only, plus `--show-summary`
 - `chat_claude_session.py`
   - recommended default for Claude live maintenance
   - aggressive Claude chat-only compactor intended for `/resume`
   - emits dialogue (`user`/`assistant` text) plus minimal resume-discovery metadata
-  - single behavior (`claude-chat-resume`), plus `--show-summary` and `--show-lineage`
+  - single behavior (`claude-chat-resume`), plus `--show-summary`
 - `compact_gemini_session.py`
   - legacy/advanced conservative Gemini compactor
   - currently `safe` only, plus `--show-summary` and `--show-lineage`
@@ -231,7 +225,7 @@ Session markers:
 - `reproduce_codex_session_profiles.sh`
   - runs `safe`, then `resume` from the same frozen snapshot, plus `chat-resume-hybrid-safe-tail` from source
 - `reproduce_claude_safe.sh`
-  - runs Claude `safe` against the latest JSONL in the active Claude project folder
+  - runs Claude `safe` against an explicitly selected closed session
 
 Codex model migration notes:
 
@@ -242,58 +236,6 @@ Layout notes:
 - root files are active runtime scripts/imports
 - `previous-versions/` is archival/reference only
 - `outputs/` and `_tmp/` are generated/scratch data
-
-## Claude long-lived hook config (manual)
-
-If you want the Claude long-lived behavior from this project, set these hook entries in `~/.claude/settings.json`.
-
-Use two path placeholders:
-
-- `path-to-project-root`: your active project root (where `HANDOFF.md` lives)
-- `path-to-session-survivor`: your local clone of this repo (where `_tools/hooks/` lives)
-
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "compact",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "echo '--- Recent HANDOFF (post-compaction refresh) ---' && tail -30 path-to-project-root/HANDOFF.md"
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "path-to-session-survivor/_tools/hooks/claude-read-before-write-gate.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "path-to-session-survivor/_tools/hooks/claude-read-before-write-gate.sh"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-Notes:
-
-- Merge these entries into your existing `hooks` object; do not overwrite unrelated hooks.
-- Optional: set `CLAUDE_READ_FRESHNESS_SECONDS` to tune read freshness window (default 3600).
 
 ## Current behavior
 
@@ -426,26 +368,12 @@ Current `safe` trimming targets:
 - remove all `thinking` blocks from `message.content` (avoids signed-thinking compaction failures)
 - long `tool_result` string content
 - nested oversized strings anywhere inside `toolUseResult`
-- oversized plain string `message.content`
 - oversized `system/local_command` content
 - reduce `message.usage` to core counters/tier
-- compact oversized `file-history-snapshot.trackedFileBackups` maps to a bounded entry set + truncation metadata
-- depth guard for safe-on-safe chains:
-  - warning at depth `>= 8`
-  - hard stop at depth `>= 12` (non-zero exit; start fresh from handover)
+- compact oversized `file-history-snapshot.trackedFileBackups` maps to a bounded entry set while preserving complete metadata for retained entries
 - per-run anchor digests from live project files:
   - `AGENTS.md`, `HANDOFF.md`, `CLAUDE.md`
   - report fields: `anchor_sources`, `anchor_hashes`, `anchor_missing`
-- stale lineage pruning for status/history records:
-  - lineage/status types are windowed to newest entries per type
-  - duplicate/superseded lineage blobs are dropped
-  - report fields: `pruned_lineage_entries`, `kept_lineage_entries`
-
-Current Claude-safe optional flags:
-
-- `--warn-depth` (default `8`)
-- `--max-depth` (default `12`)
-- `--lineage-window` (default `512`)
 
 Claude chat-resume mode (`chat_claude_session.py`):
 
@@ -460,14 +388,17 @@ Claude chat-resume mode (`chat_claude_session.py`):
   - `timestamp`
   - `uuid` (chosen resume identity field)
   - lightweight envelope keys from each kept chat row when present:
-    - `parentUuid`, `isSidechain`, `sessionId`, `userType`, `entrypoint`, `cwd`, `version`, `gitBranch`, `slug`, `permissionMode`
+    - `parentUuid`, `isSidechain`, `sessionId`, `userType`, `entrypoint`, `cwd`, `version`, `gitBranch`, `slug`, `permissionMode`, visibility/meta flags
   - with `--safe-tail-turns N` (default `1`): the newest N user turns stay as native Claude records, with thinking blocks removed and bulky tool/file-history data bounded
 - dropped records:
   - old-history attachments, queue/status lineage, most permission/status records, file-history snapshots, non-text tool payloads
   - command/meta wrapper chatter (`<local-command-caveat>`, `<command-name>`, task notifications)
 - guardrails:
+  - selects the active Claude parent chain instead of flattening abandoned branches into chat
+  - preserves native compact summaries and recent dialogue verbatim
+  - refuses duplicate UUIDs, broken parent/tool links, empty dialogue, source/output collisions, and changed sources
+  - builds artifacts privately and publishes the manifest last
   - idempotent truncation (re-running chat-resume does not keep shortening already-compacted placeholders)
-  - hard fail (non-zero exit) if filtering would produce an empty output file
 - why `uuid` (not `parentUuid`):
   - controlled `claude -r <session_id> --fork-session -p` tests passed with `type+message+timestamp+uuid`
   - controlled tests also passed with `parentUuid`, but `uuid` is self-contained and does not depend on parent links to dropped records
@@ -492,7 +423,8 @@ python3 chat_claude_session.py /path/to/claude.jsonl --safe-tail-turns 0
 
 Post-swap hygiene for Claude sessions:
 
-- if the target session was already open while you swapped the JSONL, restart Claude before testing (`/exit` all Claude terminals, then relaunch) so it reloads the file from disk
+- close the target Claude session before generating or installing a candidate
+- before swapping, verify the report's `original_sha256` still matches the live file; if not, discard the stale candidate
 - Claude session discovery loads files that end with `.jsonl`; backup suffix variants like `*.jsonl.pre-*` and `*.jsonl.orig` are ignored
 - still move backups out of `~/.claude/projects` for hygiene and to avoid operator confusion
 

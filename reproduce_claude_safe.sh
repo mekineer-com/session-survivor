@@ -3,22 +3,15 @@ set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 TOOL="$ROOT/compact_claude_session.py"
-PROJECT_DIR="${CLAUDE_PROJECT_DIR:-/home/marcos/.claude/projects/-home-marcos-apps-codex}"
-STAMP="$(date +%Y%m%dT%H%M%S)"
-OUTROOT="$ROOT/outputs/claude-repro/$STAMP"
 
-latest_session() {
-  find "$PROJECT_DIR" -maxdepth 1 -type f -name '*.jsonl' | sort | tail -n 1
+[ "${1:-}" != "" ] && [ "${1:-}" != "--latest" ] || {
+  printf 'Usage: %s /path/to/closed-claude-session.jsonl\n' "$0" >&2
+  exit 2
 }
+SOURCE="$1"
 
-if [ "${1:-}" = "" ] || [ "${1:-}" = "--latest" ]; then
-  SOURCE="$(latest_session)"
-else
-  SOURCE="$1"
-fi
-
-mkdir -p "$OUTROOT"
-
+mkdir -p "$ROOT/outputs/claude-repro"
+OUTROOT="$(mktemp -d "$ROOT/outputs/claude-repro/run.XXXXXX")"
 python3 "$TOOL" "$SOURCE" --output-root "$OUTROOT" > "$OUTROOT/run.json"
 REPORT="$(find "$OUTROOT/reports" -type f -name '*.json' | head -n 1)"
 MANIFEST="$(find "$OUTROOT/manifests" -type f -name '*.json' | head -n 1)"

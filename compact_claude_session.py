@@ -6,28 +6,20 @@ import argparse
 import copy
 import hashlib
 import json
-import os
 import pathlib
-import re
 import shutil
-import subprocess
 import sys
+import tempfile
 from typing import Any
 
-from lineage import build_compaction_manifest, describe_lineage
+from lineage import build_compaction_manifest
 
 
 DEFAULT_OUTPUT_ROOT = pathlib.Path("/home/marcos/apps-codex/session-survivor/outputs/claude")
 TOOL_OUTPUT_PLACEHOLDER = "[Compacted Claude tool result"
 LOCAL_COMMAND_PLACEHOLDER = "[Compacted Claude local command"
 FILE_HISTORY_PLACEHOLDER = "[Compacted Claude file history"
-LINEAGE_TYPES = {
-    "progress",
-    "queue-operation",
-    "last-prompt",
-    "permission-mode",
-    "custom-title",
-}
+DEFAULT_ASSISTANT_MODEL = "claude-sonnet-4-6"
 
 
 def parse_args() -> argparse.Namespace:
@@ -53,32 +45,9 @@ def parse_args() -> argparse.Namespace:
         help="Keep at most this many tracked file backups per file-history snapshot.",
     )
     parser.add_argument(
-        "--warn-depth",
-        type=int,
-        default=8,
-        help="Warn when safe-on-safe compaction depth reaches this value.",
-    )
-    parser.add_argument(
-        "--max-depth",
-        type=int,
-        default=12,
-        help="Hard stop when safe-on-safe compaction depth reaches this value.",
-    )
-    parser.add_argument(
-        "--lineage-window",
-        type=int,
-        default=512,
-        help="Keep at most this many recent lineage/status records per lineage type.",
-    )
-    parser.add_argument(
         "--show-summary",
         action="store_true",
         help="Print only a compact summary JSON to stdout.",
-    )
-    parser.add_argument(
-        "--show-lineage",
-        action="store_true",
-        help="Print lineage/provenance information for the input session and exit.",
     )
     return parser.parse_args()
 
@@ -105,32 +74,11 @@ def shorten(text: str, max_chars: int, label: str) -> tuple[str, bool]:
     return compacted, True
 
 
-def validate_jsonl(path: pathlib.Path) -> dict[str, int]:
-    line_count = 0
-    with path.open("r", encoding="utf-8") as handle:
-        for line_count, line in enumerate(handle, 1):
-            json.loads(line)
-    return {"line_count": line_count}
-
-
 def validate_jsonl_bytes(data: bytes) -> dict[str, int]:
     line_count = 0
     for line_count, line in enumerate(data.splitlines(), 1):
         json.loads(line)
     return {"line_count": line_count}
-
-
-def validate_with_jq(path: pathlib.Path) -> bool:
-    jq = shutil.which("jq")
-    if not jq:
-        return False
-    result = subprocess.run(
-        [jq, "-c", ".", str(path)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    return result.returncode == 0
 
 
 def relative_output_path(path: pathlib.Path) -> pathlib.Path:
@@ -139,80 +87,6 @@ def relative_output_path(path: pathlib.Path) -> pathlib.Path:
         idx = parts.index(".claude")
         return pathlib.Path(*parts[idx + 1 :])
     return pathlib.Path(path.name)
-
-
-def find_compacted_source_manifest(source: pathlib.Path) -> pathlib.Path | None:
-    parts = source.resolve().parts
-    if "compacted" not in parts:
-        return None
-    idx = parts.index("compacted")
-    root = pathlib.Path(*parts[:idx])
-    rel = pathlib.Path(*parts[idx + 1 :])
-    candidate = root / "manifests" / rel.with_suffix(".manifest.json")
-    if candidate.exists():
-        return candidate
-    return None
-
-
-def read_safe_depth_from_manifest(manifest_path: pathlib.Path) -> int | None:
-    try:
-        obj = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    policy = obj.get("policy")
-    if isinstance(policy, dict):
-        depth = policy.get("safe_depth")
-        if isinstance(depth, int) and depth >= 0:
-            return depth
-    return None
-
-
-def compute_safe_depth(source: pathlib.Path) -> tuple[int, pathlib.Path | None]:
-    manifest_path = find_compacted_source_manifest(source)
-    if manifest_path is None:
-        return 0, None
-    prior_depth = read_safe_depth_from_manifest(manifest_path)
-    if prior_depth is None:
-        return 1, manifest_path
-    return prior_depth + 1, manifest_path
-
-
-def write_thread_marker(
-    source: pathlib.Path,
-    compacted_copy: pathlib.Path,
-    report_path: pathlib.Path,
-    manifest_path: pathlib.Path,
-    profile: str,
-    source_sha256: str,
-) -> pathlib.Path:
-    marker_root = pathlib.Path.home() / ".claude" / "session-survivor"
-    marker_path = marker_root / "thread-markers.jsonl"
-    marker_key_dir = marker_root / "thread-marker-keys"
-    marker_root.mkdir(parents=True, exist_ok=True)
-    marker_key_dir.mkdir(parents=True, exist_ok=True)
-
-    session_id = source.stem
-    dedup_key = f"{session_id}:{source_sha256}:{profile}"
-    key_hash = hashlib.sha256(dedup_key.encode("utf-8")).hexdigest()
-    key_path = marker_key_dir / key_hash
-    if key_path.exists():
-        return marker_path
-
-    marker = {
-        "dedup_key": dedup_key,
-        "session_id": session_id,
-        "profile": profile,
-        "source_sha256": source_sha256,
-        "source": str(source),
-        "compacted_copy": str(compacted_copy),
-        "report_path": str(report_path),
-        "manifest_path": str(manifest_path),
-        "host": os.uname().nodename,
-    }
-    with marker_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(marker, ensure_ascii=False, separators=(",", ":")) + "\n")
-    key_path.write_text(dedup_key + "\n", encoding="utf-8")
-    return marker_path
 
 
 def compact_nested_strings(value: Any, max_chars: int, label: str, state: dict[str, int], counter_key: str) -> Any:
@@ -226,67 +100,6 @@ def compact_nested_strings(value: Any, max_chars: int, label: str, state: dict[s
     if isinstance(value, dict):
         return {k: compact_nested_strings(v, max_chars, label, state, counter_key) for k, v in value.items()}
     return value
-
-
-def canonical_lineage_signature(item: dict[str, Any]) -> str:
-    copy_item = copy.deepcopy(item)
-    copy_item.pop("timestamp", None)
-    copy_item.pop("uuid", None)
-    payload = json.dumps(copy_item, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def queue_tool_use_id(item: dict[str, Any]) -> str | None:
-    if item.get("type") != "queue-operation":
-        return None
-    content = item.get("content")
-    if not isinstance(content, str):
-        return None
-    match = re.search(r"<tool-use-id>([^<]+)</tool-use-id>", content)
-    if not match:
-        return None
-    return match.group(1).strip()
-
-
-def prune_stale_lineage(records: list[dict[str, Any]], args: argparse.Namespace, state: dict[str, int]) -> list[dict[str, Any]]:
-    kept_reversed: list[dict[str, Any]] = []
-    kept_by_type: dict[str, int] = {}
-    seen_signatures: dict[str, set[str]] = {}
-    seen_closed_queue_ids: set[str] = set()
-    kept_lineage_total = 0
-
-    for item in reversed(records):
-        item_type = item.get("type")
-        if item_type not in LINEAGE_TYPES:
-            kept_reversed.append(item)
-            continue
-
-        kept_count = kept_by_type.get(item_type, 0)
-        if kept_count >= args.lineage_window:
-            state["pruned_lineage_entries"] += 1
-            continue
-
-        if item_type == "queue-operation":
-            tool_id = queue_tool_use_id(item)
-            if tool_id:
-                if tool_id in seen_closed_queue_ids:
-                    state["pruned_lineage_entries"] += 1
-                    continue
-                seen_closed_queue_ids.add(tool_id)
-
-        signature = canonical_lineage_signature(item)
-        type_seen = seen_signatures.setdefault(item_type, set())
-        if signature in type_seen:
-            state["pruned_lineage_entries"] += 1
-            continue
-        type_seen.add(signature)
-
-        kept_by_type[item_type] = kept_count + 1
-        kept_lineage_total += 1
-        kept_reversed.append(item)
-
-    state["kept_lineage_entries"] = kept_lineage_total
-    return list(reversed(kept_reversed))
 
 
 def detect_project_root(records: list[dict[str, Any]]) -> pathlib.Path | None:
@@ -329,19 +142,7 @@ def compact_file_history_snapshot(snapshot: Any, max_entries: int, state: dict[s
     if original_count <= max_entries:
         return out
 
-    kept: dict[str, Any] = {}
-    for idx, (file_path, backup_meta) in enumerate(tracked.items()):
-        if idx >= max_entries:
-            break
-        if isinstance(backup_meta, dict):
-            minimal: dict[str, Any] = {}
-            if "version" in backup_meta:
-                minimal["version"] = backup_meta["version"]
-            if "backupTime" in backup_meta:
-                minimal["backupTime"] = backup_meta["backupTime"]
-            kept[file_path] = minimal if minimal else backup_meta
-        else:
-            kept[file_path] = backup_meta
+    kept = dict(list(tracked.items())[:max_entries])
 
     out["trackedFileBackups"] = kept
     out["trackedFileBackupsTruncated"] = {
@@ -387,11 +188,7 @@ def compact_record(obj: dict[str, Any], args: argparse.Namespace, state: dict[st
                     else:
                         compacted_content.append(entry)
                 message["content"] = compacted_content
-            elif isinstance(content, str):
-                compacted, changed = shorten(content, args.max_tool_output_chars, TOOL_OUTPUT_PLACEHOLDER)
-                message["content"] = compacted
-                if changed:
-                    state["message_content_truncated"] += 1
+            # Plain user/assistant strings are dialogue, not tool output.
 
             usage = message.get("usage")
             if isinstance(usage, dict):
@@ -426,34 +223,116 @@ def compact_record(obj: dict[str, Any], args: argparse.Namespace, state: dict[st
     return item
 
 
+def validate_claude_records(records: list[dict[str, Any]]) -> None:
+    uuids: set[str] = set()
+    tool_uses: set[str] = set()
+    tool_results: set[str] = set()
+    meaningful = False
+
+    for row in records:
+        row_uuid = row.get("uuid")
+        if isinstance(row_uuid, str) and row_uuid:
+            if row_uuid in uuids:
+                raise ValueError(f"Duplicate Claude UUID: {row_uuid}")
+            uuids.add(row_uuid)
+            if row.get("parentUuid") == row_uuid:
+                raise ValueError(f"Claude row is its own parent: {row_uuid}")
+
+        if row.get("type") not in ("user", "assistant"):
+            continue
+        message = row.get("message")
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            meaningful = meaningful or bool(content.strip())
+            continue
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") == "thinking":
+                continue
+            meaningful = True
+            if block.get("type") == "tool_use" and isinstance(block.get("id"), str):
+                tool_uses.add(block["id"])
+            if block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str):
+                tool_results.add(block["tool_use_id"])
+
+    if not meaningful:
+        raise ValueError("No meaningful Claude dialogue survived filtering.")
+    missing_parents = {
+        row["parentUuid"] for row in records
+        if isinstance(row.get("parentUuid"), str) and row["parentUuid"] and row["parentUuid"] not in uuids
+    }
+    if missing_parents:
+        raise ValueError(f"Claude output has unresolved parent UUIDs: {len(missing_parents)}")
+    missing_tools = tool_results - tool_uses
+    if missing_tools:
+        raise ValueError(f"Claude output has orphan tool results: {len(missing_tools)}")
+
+
+def backfill_assistant_models(
+    records: list[dict[str, Any]], reference_records: list[dict[str, Any]] | None = None
+) -> int:
+    fallback = next(
+        (
+            row["message"]["model"]
+            for row in reversed(reference_records or records)
+            if row.get("type") == "assistant"
+            and isinstance(row.get("message"), dict)
+            and isinstance(row["message"].get("model"), str)
+            and row["message"]["model"]
+        ),
+        DEFAULT_ASSISTANT_MODEL,
+    )
+    changed = 0
+    for row in records:
+        if row.get("type") != "assistant" or not isinstance(row.get("message"), dict):
+            continue
+        if not isinstance(row["message"].get("model"), str) or not row["message"]["model"]:
+            row["message"]["model"] = fallback
+            changed += 1
+    return changed
+
+
+def publish_artifacts(
+    source: pathlib.Path,
+    original_bytes: bytes,
+    output_root: pathlib.Path,
+    artifacts: list[tuple[pathlib.Path, bytes]],
+    manifest_path: pathlib.Path,
+) -> None:
+    if not artifacts or artifacts[-1][0].resolve() != manifest_path.resolve():
+        raise ValueError("Claude manifest must be the final published artifact.")
+    if source.resolve() in {path.resolve() for path, _ in artifacts}:
+        raise ValueError("Source and output paths collide; refusing to overwrite the source.")
+
+    output_root.mkdir(parents=True, exist_ok=True)
+    staging = pathlib.Path(tempfile.mkdtemp(prefix=".claude-building-", dir=output_root))
+    try:
+        staged: dict[pathlib.Path, pathlib.Path] = {}
+        for final, data in artifacts:
+            path = staging / final.resolve().relative_to(output_root.resolve())
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            staged[final] = path
+        if source.read_bytes() != original_bytes:
+            raise RuntimeError("Source changed during candidate generation; outputs were not published.")
+        manifest_path.unlink(missing_ok=True)
+        for final, _ in artifacts:
+            final.parent.mkdir(parents=True, exist_ok=True)
+            staged[final].replace(final)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
 def main() -> int:
     args = parse_args()
-    if args.warn_depth < 0 or args.max_depth < 0:
-        raise SystemExit("warn-depth and max-depth must be non-negative.")
-    if args.warn_depth >= args.max_depth:
-        raise SystemExit("warn-depth must be lower than max-depth.")
-    if args.lineage_window < 1:
-        raise SystemExit("lineage-window must be >= 1.")
 
     source = pathlib.Path(args.session).expanduser().resolve()
     if not source.exists():
         raise SystemExit(f"Session file not found: {source}")
-
-    if args.show_lineage:
-        print(json.dumps(describe_lineage(source), indent=2, ensure_ascii=False))
-        return 0
-
-    safe_depth, parent_manifest_path = compute_safe_depth(source)
     warnings: list[str] = []
-    if safe_depth >= args.max_depth:
-        raise SystemExit(
-            f"Claude safe compaction depth {safe_depth} reached max-depth {args.max_depth}. "
-            "Stop chaining compactions; start a fresh session from handover."
-        )
-    if safe_depth >= args.warn_depth:
-        warnings.append(
-            f"Claude safe compaction depth warning: depth={safe_depth} (warn={args.warn_depth}, max={args.max_depth})."
-        )
 
     output_root = pathlib.Path(args.output_root).expanduser().resolve()
     rel = relative_output_path(source)
@@ -463,23 +342,16 @@ def main() -> int:
     manifest_path = output_root / "manifests" / rel.with_suffix(".manifest.json")
 
     original_bytes = source.read_bytes()
-    original_copy.parent.mkdir(parents=True, exist_ok=True)
-    compacted_copy.parent.mkdir(parents=True, exist_ok=True)
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    original_copy.write_bytes(original_bytes)
     original_sha256 = sha256_bytes(original_bytes)
     original_validation = validate_jsonl_bytes(original_bytes)
 
     state = {
         "thinking_blocks_removed": 0,
         "tool_outputs_truncated": 0,
-        "message_content_truncated": 0,
         "local_command_truncated": 0,
         "message_usage_compacted": 0,
         "file_history_snapshots_compacted": 0,
-        "pruned_lineage_entries": 0,
-        "kept_lineage_entries": 0,
+        "assistant_models_backfilled": 0,
     }
 
     records = [json.loads(line) for line in original_bytes.splitlines()]
@@ -506,15 +378,13 @@ def main() -> int:
         warnings.append("All anchor files missing (AGENTS.md, HANDOFF.md, CLAUDE.md).")
 
     transformed = [compact_record(obj, args, state) for obj in records]
-    transformed = prune_stale_lineage(transformed, args, state)
-
-    with compacted_copy.open("w", encoding="utf-8") as dst:
-        for compacted in transformed:
-            dst.write(json.dumps(compacted, ensure_ascii=False, separators=(",", ":")) + "\n")
-
-    compacted_validation = validate_jsonl(compacted_copy)
-    jq_ok = validate_with_jq(compacted_copy)
-    compacted_bytes = compacted_copy.read_bytes()
+    state["assistant_models_backfilled"] = backfill_assistant_models(transformed, records)
+    validate_claude_records(transformed)
+    compacted_bytes = b"".join(
+        (json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        for row in transformed
+    )
+    compacted_validation = validate_jsonl_bytes(compacted_bytes)
     compacted_sha256 = sha256_bytes(compacted_bytes)
     generated_at = transformed[-1].get("timestamp") if transformed else None
 
@@ -529,25 +399,17 @@ def main() -> int:
         "bytes_saved": len(original_bytes) - len(compacted_bytes),
         "original_lines": original_validation["line_count"],
         "compacted_lines": compacted_validation["line_count"],
-        "jq_valid": jq_ok,
         "manifest_path": str(manifest_path),
         "changes": state,
         "warnings": warnings,
-        "compaction_depth": safe_depth,
         "anchor_sources": anchor_sources,
         "anchor_hashes": anchor_hashes,
         "anchor_missing": anchor_missing,
-        "pruned_lineage_entries": state["pruned_lineage_entries"],
-        "kept_lineage_entries": state["kept_lineage_entries"],
         "policy": {
             "profile": "safe",
             "max_tool_output_chars": args.max_tool_output_chars,
             "max_file_history_entries": args.max_file_history_entries,
             "strip_thinking_blocks": True,
-            "warn_depth": args.warn_depth,
-            "max_depth": args.max_depth,
-            "safe_depth": safe_depth,
-            "lineage_window": args.lineage_window,
         },
     }
 
@@ -567,21 +429,20 @@ def main() -> int:
         max_replacement_records=0,
     )
 
-    manifest.setdefault("policy", {})
-    manifest["policy"]["safe_depth"] = safe_depth
-    if parent_manifest_path is not None:
-        manifest["lineage"]["parent_manifest"] = str(parent_manifest_path)
-    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    marker_path = write_thread_marker(
-        source=source,
-        compacted_copy=compacted_copy,
-        report_path=report_path,
-        manifest_path=manifest_path,
-        profile="claude-safe",
-        source_sha256=original_sha256,
+    report_bytes = (json.dumps(report, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    manifest_bytes = (json.dumps(manifest, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    publish_artifacts(
+        source,
+        original_bytes,
+        output_root,
+        [
+            (original_copy, original_bytes),
+            (compacted_copy, compacted_bytes),
+            (report_path, report_bytes),
+            (manifest_path, manifest_bytes),
+        ],
+        manifest_path,
     )
-    report["thread_marker_path"] = str(marker_path)
-    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     if args.show_summary:
         print(
             json.dumps(
@@ -590,7 +451,6 @@ def main() -> int:
                     "bytes_saved": report["bytes_saved"],
                     "changes": state,
                     "warnings": warnings,
-                    "compaction_depth": safe_depth,
                     "report_path": str(report_path),
                     "manifest_path": str(manifest_path),
                 },
