@@ -226,7 +226,8 @@ def compact_record(obj: dict[str, Any], args: argparse.Namespace, state: dict[st
 
 def validate_claude_records(records: list[dict[str, Any]]) -> None:
     uuids: set[str] = set()
-    tool_uses: set[str] = set()
+    tool_uses: dict[str, set[str]] = {}
+    tool_results: list[tuple[str, str]] = []
     meaningful = False
 
     for row in records:
@@ -258,10 +259,13 @@ def validate_claude_records(records: list[dict[str, Any]]) -> None:
             else:
                 meaningful = True
             if block_type == "tool_use" and isinstance(block.get("id"), str):
-                tool_uses.add(block["id"])
+                if not isinstance(row_uuid, str) or not row_uuid:
+                    raise ValueError("Claude tool invocation has no row UUID.")
+                tool_uses.setdefault(row_uuid, set()).add(block["id"])
             if block_type == "tool_result" and isinstance(block.get("tool_use_id"), str):
-                if block["tool_use_id"] not in tool_uses:
-                    raise ValueError("Claude output has an orphan or out-of-order tool result.")
+                if not isinstance(row_uuid, str) or not row_uuid:
+                    raise ValueError("Claude tool result has no row UUID.")
+                tool_results.append((row_uuid, block["tool_use_id"]))
 
     if not meaningful:
         raise ValueError("No meaningful Claude dialogue survived filtering.")
@@ -285,6 +289,14 @@ def validate_claude_records(records: list[dict[str, Any]]) -> None:
             parent = by_uuid[current].get("parentUuid")
             current = parent if isinstance(parent, str) and parent else None
         checked.update(seen)
+    for row_uuid, tool_id in tool_results:
+        parent = by_uuid[row_uuid].get("parentUuid")
+        while isinstance(parent, str) and parent in by_uuid:
+            if tool_id in tool_uses.get(parent, set()):
+                break
+            parent = by_uuid[parent].get("parentUuid")
+        else:
+            raise ValueError("Claude output has a tool result without an invocation in its parent chain.")
 
 
 def backfill_assistant_models(

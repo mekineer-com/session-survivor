@@ -74,11 +74,18 @@ class ClaudeSessionTest(unittest.TestCase):
         orphan = row("user", "r", None, [
             {"type": "tool_result", "tool_use_id": "missing", "content": "result"}
         ])
-        with self.assertRaisesRegex(ValueError, "orphan"):
+        with self.assertRaisesRegex(ValueError, "parent chain"):
             validate_claude_records([orphan])
         with self.assertRaisesRegex(ValueError, "parent cycle"):
             validate_claude_records([row("user", "u", "a", "question"),
                                      row("assistant", "a", "u", "answer")])
+        sibling_tool = [
+            row("user", "u", None, "question"),
+            row("assistant", "a", "u", [{"type": "tool_use", "id": "call"}]),
+            row("user", "b", "u", [{"type": "tool_result", "tool_use_id": "call"}]),
+        ]
+        with self.assertRaisesRegex(ValueError, "parent chain"):
+            validate_claude_records(sibling_tool)
         models = [row("assistant", "a", None, "real", message_extra={"model": "claude-opus-4-6"}),
                   row("assistant", "s", "a", "generated", message_extra={"model": "<synthetic>"}),
                   row("assistant", "m", "s", "missing")]
