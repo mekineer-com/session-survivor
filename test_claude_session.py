@@ -1,3 +1,4 @@
+import fcntl
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -36,6 +37,9 @@ class ClaudeSessionTest(unittest.TestCase):
         self.assertEqual([item["uuid"] for item in selected], ["u", "active"])
         with self.assertRaisesRegex(ValueError, "Duplicate Claude UUID"):
             active_branch_records([records[0], records[0]], defaultdict(int))
+        sidechain = row("assistant", "side", None, "side task", isSidechain=True)
+        selected = active_branch_records([*records, sidechain], defaultdict(int))
+        self.assertEqual([item["uuid"] for item in selected], ["u", "active"])
 
     def test_summary_dialogue_and_model_identity_are_preserved(self):
         summary = "This session is being continued from a previous conversation that ran out of context.\n\nSummary:" + "x" * 5000
@@ -70,8 +74,16 @@ class ClaudeSessionTest(unittest.TestCase):
         orphan = row("user", "r", None, [
             {"type": "tool_result", "tool_use_id": "missing", "content": "result"}
         ])
-        with self.assertRaisesRegex(ValueError, "orphan tool"):
+        with self.assertRaisesRegex(ValueError, "orphan"):
             validate_claude_records([orphan])
+        with self.assertRaisesRegex(ValueError, "parent cycle"):
+            validate_claude_records([row("user", "u", "a", "question"),
+                                     row("assistant", "a", "u", "answer")])
+        models = [row("assistant", "a", None, "real", message_extra={"model": "claude-opus-4-6"}),
+                  row("assistant", "s", "a", "generated", message_extra={"model": "<synthetic>"}),
+                  row("assistant", "m", "s", "missing")]
+        backfill_assistant_models(models)
+        self.assertEqual(models[-1]["message"]["model"], "claude-opus-4-6")
 
     def test_file_history_keeps_complete_retained_metadata(self):
         tracked = {f"file-{i}": {"version": i, "backupFileName": f"backup-{i}", "realParentDir": "/tmp"}
@@ -100,6 +112,21 @@ class ClaudeSessionTest(unittest.TestCase):
                 publish_artifacts(source, b'{"old":true}\n', root,
                                   [(path, b'{}\n') for path in paths], paths[-1])
             self.assertFalse(any(path.exists() for path in paths))
+
+    def test_publication_lock_refuses_overlap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.jsonl"
+            source.write_text('{}\n')
+            manifest = root / "manifest.json"
+            lock = (root / ".claude-publish.lock").open("w")
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "publication is running"):
+                    publish_artifacts(source, source.read_bytes(), root,
+                                      [(manifest, b'{}\n')], manifest)
+            finally:
+                lock.close()
 
 
 if __name__ == "__main__":

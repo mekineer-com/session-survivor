@@ -242,8 +242,18 @@ def active_branch_records(records: list[dict[str, Any]], state: dict[str, int]) 
             raise ValueError(f"Duplicate Claude UUID: {row_uuid}")
         by_uuid[row_uuid] = row
 
-    leaf = next((row for row in reversed(records) if row.get("uuid") in by_uuid), None)
+    leaf = next(
+        (
+            row for row in reversed(records)
+            if row.get("uuid") in by_uuid
+            and row.get("type") in ("user", "assistant")
+            and not row.get("isSidechain")
+        ),
+        None,
+    )
     if leaf is None:
+        if by_uuid:
+            raise ValueError("Claude session has no main-conversation branch.")
         return records
     active: set[str] = set()
     row = leaf

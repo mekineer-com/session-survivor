@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import fcntl
 import hashlib
 import json
 import pathlib
@@ -226,7 +227,6 @@ def compact_record(obj: dict[str, Any], args: argparse.Namespace, state: dict[st
 def validate_claude_records(records: list[dict[str, Any]]) -> None:
     uuids: set[str] = set()
     tool_uses: set[str] = set()
-    tool_results: set[str] = set()
     meaningful = False
 
     for row in records:
@@ -252,11 +252,16 @@ def validate_claude_records(records: list[dict[str, Any]]) -> None:
         for block in content:
             if not isinstance(block, dict) or block.get("type") == "thinking":
                 continue
-            meaningful = True
-            if block.get("type") == "tool_use" and isinstance(block.get("id"), str):
+            block_type = block.get("type")
+            if block_type == "text":
+                meaningful = meaningful or bool(str(block.get("text", "")).strip())
+            else:
+                meaningful = True
+            if block_type == "tool_use" and isinstance(block.get("id"), str):
                 tool_uses.add(block["id"])
-            if block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str):
-                tool_results.add(block["tool_use_id"])
+            if block_type == "tool_result" and isinstance(block.get("tool_use_id"), str):
+                if block["tool_use_id"] not in tool_uses:
+                    raise ValueError("Claude output has an orphan or out-of-order tool result.")
 
     if not meaningful:
         raise ValueError("No meaningful Claude dialogue survived filtering.")
@@ -266,9 +271,20 @@ def validate_claude_records(records: list[dict[str, Any]]) -> None:
     }
     if missing_parents:
         raise ValueError(f"Claude output has unresolved parent UUIDs: {len(missing_parents)}")
-    missing_tools = tool_results - tool_uses
-    if missing_tools:
-        raise ValueError(f"Claude output has orphan tool results: {len(missing_tools)}")
+    by_uuid = {row["uuid"]: row for row in records if isinstance(row.get("uuid"), str) and row["uuid"]}
+    checked: set[str] = set()
+    for start in by_uuid:
+        if start in checked:
+            continue
+        seen: set[str] = set()
+        current: str | None = start
+        while current in by_uuid and current not in checked:
+            if current in seen:
+                raise ValueError("Claude output has a parent cycle.")
+            seen.add(current)
+            parent = by_uuid[current].get("parentUuid")
+            current = parent if isinstance(parent, str) and parent else None
+        checked.update(seen)
 
 
 def backfill_assistant_models(
@@ -282,6 +298,8 @@ def backfill_assistant_models(
             and isinstance(row.get("message"), dict)
             and isinstance(row["message"].get("model"), str)
             and row["message"]["model"]
+            and "synthetic" not in row["message"]["model"].casefold()
+            and not row["message"]["model"].startswith("<")
         ),
         DEFAULT_ASSISTANT_MODEL,
     )
@@ -308,22 +326,27 @@ def publish_artifacts(
         raise ValueError("Source and output paths collide; refusing to overwrite the source.")
 
     output_root.mkdir(parents=True, exist_ok=True)
-    staging = pathlib.Path(tempfile.mkdtemp(prefix=".claude-building-", dir=output_root))
-    try:
-        staged: dict[pathlib.Path, pathlib.Path] = {}
-        for final, data in artifacts:
-            path = staging / final.resolve().relative_to(output_root.resolve())
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-            staged[final] = path
-        if source.read_bytes() != original_bytes:
-            raise RuntimeError("Source changed during candidate generation; outputs were not published.")
-        manifest_path.unlink(missing_ok=True)
-        for final, _ in artifacts:
-            final.parent.mkdir(parents=True, exist_ok=True)
-            staged[final].replace(final)
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
+    with (output_root / ".claude-publish.lock").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("Another Claude candidate publication is running.") from exc
+        staging = pathlib.Path(tempfile.mkdtemp(prefix=".claude-building-", dir=output_root))
+        try:
+            staged: dict[pathlib.Path, pathlib.Path] = {}
+            for final, data in artifacts:
+                path = staging / final.resolve().relative_to(output_root.resolve())
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+                staged[final] = path
+            if source.read_bytes() != original_bytes:
+                raise RuntimeError("Source changed during candidate generation; outputs were not published.")
+            manifest_path.unlink(missing_ok=True)
+            for final, _ in artifacts:
+                final.parent.mkdir(parents=True, exist_ok=True)
+                staged[final].replace(final)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
 
 
 def main() -> int:
