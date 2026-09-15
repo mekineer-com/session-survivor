@@ -81,7 +81,7 @@ python3 grok_usage_stats.py
 This creates a full `original/` backup, `compacted/` candidate and `manifest.json`
 with per-file hashes. It never swaps the source. The default retains the newest
 complete native turn (`--safe-tail-turns 1`); older user/assistant dialogue is
-uses native user records from current chat and retained `compaction_requests/`
+rebuilt from native user records in current chat and retained `compaction_requests/`
 inputs, plus authoritative dialogue from `updates.jsonl`, with no text cap or
 generated summary. Grok 1.0.30 user rows removed by native compaction are rebuilt
 from their exact update text using the observed native query/reminder envelope.
@@ -99,7 +99,7 @@ staging directory and published together by rename. A failed run leaves the
 requested output path absent so it can be retried; a process crash may leave a
 hidden `.grok-building-*` directory, never a published candidate.
 
-Tests: `python3 -m unittest test_chat_grok_session.py` and the opt-in
+Tests: `python3 -m unittest test_chat_grok_session.py test_chat_grok_v3.py` and the opt-in
 `python3 probe_grok_resume.py`. The latter runs Grok against a localhost model
 stub, consumes no model quota, and retains synthetic artifacts under `/tmp`.
 Two resumes, native checkpoints, tool-pair transport, transcript export and ACP
@@ -107,6 +107,29 @@ UI-history replay pass. **Rewind execution is not certified:** Grok 1.0.13 retur
 `success:false` for both the candidate and an uncompacted control in the tested
 ACP flow. Rewind points still load; no workaround or checkpoint deletion is applied.
 Details: [GROK_SESSION_ANALYSIS.md](GROK_SESSION_ANALYSIS.md).
+
+When verbatim Grok chat still consumes too much model context, use authored
+tiered summaries. The exporter starts at the first native prompt still present,
+so later runs do not export periods already summarized:
+
+```sh
+python3 export_grok_summary_source.py /path/to/closed/grok/session \
+  --output-root outputs/grok-summary-source-unique
+python3 chat_grok_v3.py /path/to/closed/grok/session \
+  --summary-file /path/to/WEEKLY_SUMMARIES.md \
+  --output-root outputs/grok-v3-unique
+```
+
+Summary blocks use the same `## Week of ...` or `## Period of ...` headings as
+Codex v3. They must cover one contiguous oldest-prompt prefix and must not touch
+the native safe tail; unmatched recent prompts remain verbatim. Give the
+summarizer the compact orientation packet described under **Summary policy**.
+The model-facing chat receives clearly labeled continuity context, while old
+display dialogue, rewind data, checkpoints, and UI replay remain available;
+base maintenance still empties bulky old tool/thought payloads from updates.
+Grok normalizes custom summary rows to `synthetic_reason=unknown` on resume, so
+maintenance recognizes the stable provenance sentence as well as the original
+field. The localhost probe verifies summary loading and repeated maintenance.
 
 Codex `safe` + `resume` profile reproduction (advanced):
 

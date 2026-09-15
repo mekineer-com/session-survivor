@@ -183,3 +183,20 @@ therefore began at prompt 354 while authoritative `updates.jsonl` still covered
 0 through 466. Repeated chat maintenance now reconstructs only missing indexed
 user rows from the exact update text and the observed native query/reminder
 envelope; archived native rows still take precedence.
+
+## Tiered authored summaries
+
+`export_grok_summary_source.py` exports the authoritative user/assistant display
+dialogue by UTC day, beginning at the first indexed prompt still present in the
+model chat. `chat_grok_v3.py` replaces only a contiguous oldest-prompt prefix
+with externally authored `## Week/Period of ...` summaries. Recent unmatched
+prompts and the native safe tail stay verbatim. Display dialogue, checkpoints,
+rewind data, and other auxiliary files remain available; the base chat profile
+still empties bulky old tool/thought payloads from update envelopes.
+
+Grok 1.0.30 accepts unindexed continuity rows in model context but rewrites an
+unrecognized `synthetic_reason` to `unknown` after resume. The stable provenance
+sentence therefore identifies v3 summaries on later maintenance. The localhost
+probe confirms that old dialogue is absent from model requests, the summary is
+present, ACP still replays original history, and a later `chat_grok_session.py`
+run does not expand the summarized prefix again.

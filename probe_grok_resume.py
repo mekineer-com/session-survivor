@@ -11,7 +11,8 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from chat_grok_session import build_candidate, read_rows, write_rows
+from chat_grok_session import CONTINUITY_PREFIX, build_candidate, read_rows, write_rows
+from chat_grok_v3 import split_turns
 
 
 def main():
@@ -166,6 +167,21 @@ def main():
         text = run('candidate-second-resume', '-r', session_id, '-p', 'Continue TEST_CANDIDATE_GRAY.')
         assert 'TEST_USER_COBALT' in text and 'TEST_TOOL_RESULT' in text
         print('PASS: rebuilt dialogue and native tool pair reach the model on two resumes', flush=True)
+
+        rows = read_rows(chat)
+        header, turns = split_turns(rows)
+        continuity = {'type': 'user', 'synthetic_reason': 'continuity_summary',
+                      'content': [{'type': 'text', 'text':
+                                   f'{CONTINUITY_PREFIX}\n\n'
+                                   'TEST_CONTINUITY_SCARLET: authored synthetic history.'}]}
+        write_rows(chat, header + [continuity] + turns[-1])
+        text = run('v3-summary-resume', '-r', session_id, '-p', 'Continue TEST_V3_GREEN.')
+        assert 'TEST_CONTINUITY_SCARLET' in text and 'TEST_USER_COBALT' not in text
+        maintained = build_candidate(session, root / 'v3-maintenance-test')
+        maintained_chat = read_rows(Path(maintained['compacted_copy']) / 'chat_history.jsonl')
+        assert 'TEST_CONTINUITY_SCARLET' in json.dumps(maintained_chat)
+        assert 'TEST_USER_COBALT' not in json.dumps(maintained_chat)
+        print('PASS: v3 summary survives resume and later chat maintenance', flush=True)
 
         notifications = []
         messages = queue.Queue()

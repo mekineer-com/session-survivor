@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from chat_grok_session import build_candidate, rebuild, validate_tools
+from chat_grok_session import CONTINUITY_PREFIX, build_candidate, rebuild, validate_tools
 
 
 def event(kind, **fields):
@@ -55,6 +55,17 @@ class GrokChatTest(unittest.TestCase):
                 rebuild(chat, changed)
         with self.assertRaises(ValueError):
             validate_tools([{'type': 'tool_result', 'tool_call_id': 'orphan'}])
+
+    def test_continuity_summary_prevents_old_dialogue_reexpansion(self):
+        chat, updates = self.fixture()
+        summary = {'type': 'user', 'synthetic_reason': 'unknown',
+                   'content': [{'type': 'text', 'text':
+                                f'{CONTINUITY_PREFIX}\n\nSynthetic continuity summary'}]}
+        chat = [chat[0], summary, *chat[3:]]
+        output, _ = rebuild(chat, updates)
+        self.assertIn(summary, output)
+        self.assertFalse(any(row.get('prompt_index') == 0 for row in output))
+        self.assertEqual(output[-2:], chat[-2:])
 
     def test_refuse_open_session_before_output(self):
         with tempfile.TemporaryDirectory() as directory:

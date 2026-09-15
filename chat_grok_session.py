@@ -10,6 +10,19 @@ from pathlib import Path
 import shutil
 import tempfile
 
+CONTINUITY_PREFIX = 'This is an LLM-authored continuity summary, not a verbatim user message.'
+
+
+def is_continuity_summary(row):
+    if row.get('type') != 'user':
+        return False
+    if row.get('synthetic_reason') == 'continuity_summary':
+        return True
+    content = row.get('content')
+    return (isinstance(content, list) and len(content) == 1
+            and content[0].get('type') == 'text'
+            and content[0].get('text', '').startswith(CONTINUITY_PREFIX))
+
 
 def read_rows(path):
     with path.open(encoding='utf-8') as handle:
@@ -59,6 +72,8 @@ def rebuild(chat, updates, safe_tail_turns=1, archived_histories=()):
     tail_start, tail_index = native_users[-min(safe_tail_turns, len(native_users))]
     tail = chat[tail_start:]
     validate_tools(tail)
+    continuity_summary = any(is_continuity_summary(row) for row in chat[:native_users[0][0]])
+    history_floor = native_users[0][1] if continuity_summary else 0
     native = {}
     reminders = {}
     for history in [*archived_histories, chat]:
@@ -110,7 +125,7 @@ def rebuild(chat, updates, safe_tail_turns=1, archived_histories=()):
         event = row['params']['update']
         kind = event['sessionUpdate']
         if kind == 'user_message_chunk':
-            if current_index is not None and current_index < tail_index:
+            if current_index is not None and history_floor <= current_index < tail_index:
                 history.extend(reminders.get(current_index, []))
             current_index = event['_meta']['promptIndex']
             if not isinstance(current_index, int) or current_index != len(indices):
@@ -124,6 +139,13 @@ def rebuild(chat, updates, safe_tail_turns=1, archived_histories=()):
         if kind == 'turn_completed':
             completed = True
         if current_index >= tail_index:
+            continue
+        if current_index < history_floor:
+            if kind in ('tool_call', 'tool_call_update'):
+                for field in ('rawInput', 'rawOutput', 'content'):
+                    event.pop(field, None)
+            elif kind == 'agent_thought_chunk':
+                event['content'] = {'type': 'text', 'text': ''}
             continue
         if kind in ('user_message_chunk', 'agent_message_chunk'):
             content = event['content']
