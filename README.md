@@ -1,6 +1,8 @@
 # session-survivor
 
-Tools for compacting and continuing long AI agent sessions.
+Tools for keeping long-lived coding agents resumable in each CLI's native session format. They trim old bulk; Codex v3 can fold old weeks into LLM-authored summaries while keeping a native recent tail.
+
+Questions and ideas: [Discussions](https://github.com/mekineer-com/session-survivor/discussions). Bugs: [Issues](https://github.com/mekineer-com/session-survivor/issues).
 
 ## Status
 
