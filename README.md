@@ -1,6 +1,10 @@
 # session-survivor
 
-Tools for keeping long-lived coding agents resumable in each CLI's native session format. They trim old bulk; Codex v3 can fold old weeks into LLM-authored summaries while keeping a native recent tail.
+**Session Survivor helps keep long-running coding-agent sessions small enough to continue.**
+
+Coding CLIs accumulate more than conversation: old tool outputs, reasoning and thinking blobs, metadata, compaction checkpoints, and file snapshots. Session Survivor trims that bulk while preserving useful dialogue and recent native state. For older history, it can also use LLM-written summaries.
+
+It produces smaller, native-format session candidates for Codex, Claude Code, Grok Build, and Gemini. Close the session, keep the original, and validate a candidate before using it.
 
 Questions and ideas: [Discussions](https://github.com/mekineer-com/session-survivor/discussions). Bugs: [Issues](https://github.com/mekineer-com/session-survivor/issues).
 
