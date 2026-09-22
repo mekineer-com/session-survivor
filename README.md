@@ -2,6 +2,8 @@
 
 **Session Survivor helps keep long-running coding-agent sessions small enough to continue.**
 
+One of our long Codex sessions shrank from about 96 MB to 2.2 MB and resumed successfully.
+
 Unlike project-memory tools that brief a new agent, it keeps the same CLI session resumable.
 
 Coding CLIs accumulate more than conversation: old tool outputs, reasoning and thinking blobs, metadata, compaction checkpoints, and file snapshots. Session Survivor trims that bulk while preserving useful dialogue and recent native state. For older history, it can also use LLM-written summaries.
