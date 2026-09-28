@@ -479,8 +479,8 @@ Session chaining (what this means):
 
 - `CODEX_SESSION_ANALYSIS.md`
   - current Codex failure-mode analysis and implemented safeguards
-- `CODEX_SESSION_COMPACTION_REPRO.md`
-  - current Codex profile reproduction and manual swap runbook
+- `CODEX_SESSION_SURVIVOR_RUNBOOK.md`
+  - canonical Codex maintenance, validation, atomic swap, rollback, and profile-comparison runbook
 
 ## Limits
 

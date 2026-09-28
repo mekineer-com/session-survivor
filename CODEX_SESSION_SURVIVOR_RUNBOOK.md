@@ -1,7 +1,46 @@
-# Codex Session Compaction Reproduction
+# Codex Session Survivor Runbook
 
-This is the practical runbook for comparing Codex compaction profiles safely.
-Use it when you want repeatable tests, not one-off guesses.
+This is the canonical runbook for normal Codex session maintenance and safe
+profile comparisons. It does not cover leaked-thought scrubbing or backups to
+MEGA.
+
+## Normal Chat Maintenance
+
+Use `chat_codex_session.py` unless reviewed, authored summaries require the v3
+flow documented in `README.md`.
+
+1. Let Codex compact in-session, exchange one ordinary turn, then `/exit`.
+2. Confirm the session process is gone. Never transform or swap an open session.
+3. Run from this repository with the exact session path and a new output folder:
+
+```sh
+TARGET="/home/marcos/.codex/sessions/<...>/rollout-...jsonl"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+RUN="outputs/codex-chat-maintenance-$STAMP"
+
+python3 chat_codex_session.py "$TARGET" --output-root "$RUN" --show-summary
+```
+
+4. Use the paths printed by the script. Require all of these before replacement:
+   - the manifest exists; it is the completion seal
+   - report `warnings` is empty and `changes.messages_truncated` is `0`
+   - the live source hash still equals `manifest.source.sha256`
+   - candidate hash and line count equal `manifest.result`
+   - candidate parses line by line as JSON
+   - its first row retains the target session ID
+   - existing authored summary rows remain
+5. Keep the full original in the run's `original/` tree. Copy the candidate to a
+   temporary file beside the live target, validate it again, then rename it over
+   the target. A same-directory rename is the atomic swap.
+6. Verify the installed hash and JSON again. Resume by session ID and ask one
+   ordinary continuity question before considering maintenance accepted.
+
+If any gate fails, do not swap. The run's `original/` copy is the rollback.
+
+## Profile Comparison
+
+Use the rest of this document when comparing profiles from one frozen source,
+not for routine maintenance.
 
 ## Plain-English Goal
 
@@ -105,23 +144,8 @@ For `chat-resume-hybrid-safe-tail`:
 
 ## Manual Swap and Rollback
 
-Do this only when the target Codex session is closed and not writing.
-
-Example pattern:
-
-```sh
-TARGET="/home/marcos/.codex/sessions/<...>/rollout-...jsonl"
-RUN="/home/marcos/apps-codex/session-survivor/outputs/repro/<timestamp>"
-
-cp "$TARGET" "$TARGET.pre-swap.bak"
-cp "$RUN/safe/compacted/<matching-relative-path>.jsonl" "$TARGET"
-```
-
-Rollback:
-
-```sh
-cp "$TARGET.pre-swap.bak" "$TARGET"
-```
+Follow the validation and atomic-swap gates in **Normal Chat Maintenance**, using
+the chosen profile's candidate path. Roll back from that run's `original/` copy.
 
 ## Troubleshooting
 
