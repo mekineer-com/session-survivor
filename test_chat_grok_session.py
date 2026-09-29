@@ -6,7 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from chat_grok_session import CONTINUITY_PREFIX, build_candidate, rebuild, validate_tools
+from chat_grok_session import (CONTINUITY_PREFIX, build_candidate, compact_current_chat,
+                               rebuild, validate_tools)
 
 
 def event(kind, **fields):
@@ -66,6 +67,30 @@ class GrokChatTest(unittest.TestCase):
         self.assertIn(summary, output)
         self.assertFalse(any(row.get('prompt_index') == 0 for row in output))
         self.assertEqual(output[-2:], chat[-2:])
+
+    def test_current_chat_preserves_summaries_and_drops_old_machine_rows(self):
+        summary = {'type': 'user', 'synthetic_reason': 'compaction_meta',
+                   'content': 'Synthetic native summary'}
+        old_user = {'type': 'user', 'prompt_index': 7, 'content': 'Old question'}
+        old_answer = {'type': 'assistant', 'content': 'Old answer',
+                      'tool_calls': [{'id': 'old-tool'}]}
+        tail = [
+            {'type': 'user', 'prompt_index': 8, 'content': 'Recent question'},
+            {'type': 'assistant', 'content': '', 'tool_calls': [{'id': 'tail-tool'}]},
+            {'type': 'tool_result', 'tool_call_id': 'tail-tool', 'content': 'Recent result'},
+            {'type': 'assistant', 'content': 'Recent answer'},
+        ]
+        chat = [
+            {'type': 'system', 'content': 'Synthetic instructions'}, summary, old_user,
+            {'type': 'reasoning', 'encrypted_content': 'machine-only'}, old_answer,
+            {'type': 'tool_result', 'tool_call_id': 'old-tool', 'content': 'Old result'}, *tail,
+        ]
+        output = compact_current_chat(chat)
+        self.assertEqual(output[:3], chat[:3])
+        self.assertEqual(output[3], {'type': 'assistant', 'content': 'Old answer'})
+        self.assertEqual(output[-4:], tail)
+        self.assertNotIn('machine-only', str(output))
+        self.assertNotIn('Old result', str(output))
 
     def test_refuse_open_session_before_output(self):
         with tempfile.TemporaryDirectory() as directory:

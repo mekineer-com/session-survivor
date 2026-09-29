@@ -177,6 +177,30 @@ def rebuild(chat, updates, safe_tail_turns=1, archived_histories=()):
     return header + history + tail, output_updates
 
 
+def compact_current_chat(chat, safe_tail_turns=1):
+    if safe_tail_turns < 1:
+        raise ValueError('safe-tail-turns must be at least 1')
+    native_users = [i for i, row in enumerate(chat)
+                    if row['type'] == 'user' and 'prompt_index' in row]
+    if not native_users:
+        raise ValueError('No indexed native user turn; inspect before rebuilding')
+    tail_start = native_users[-min(safe_tail_turns, len(native_users))]
+    tail = chat[tail_start:]
+    validate_tools(tail)
+    history = []
+    for row in chat[:tail_start]:
+        if row['type'] in ('reasoning', 'tool_result'):
+            continue
+        if row['type'] == 'assistant':
+            if not isinstance(row.get('content'), str):
+                raise ValueError('Non-text dialogue requires a media-aware profile')
+            if row['content']:
+                history.append({'type': 'assistant', 'content': row['content']})
+        else:
+            history.append(copy.deepcopy(row))
+    return history + tail
+
+
 def inventory(directory):
     result = {}
     for path in sorted(directory.rglob('*')):
@@ -192,7 +216,7 @@ def inventory(directory):
     return result
 
 
-def build_candidate(source, output, safe_tail_turns=1):
+def build_candidate(source, output, safe_tail_turns=1, current_chat_only=False):
     source, output = Path(source).expanduser().resolve(), Path(output).expanduser().resolve()
     if output == source or source in output.parents or output.exists():
         raise ValueError('Output must be a new directory outside the source')
@@ -221,9 +245,11 @@ def build_candidate(source, output, safe_tail_turns=1):
     archives = [json.loads(path.read_text(encoding='utf-8'))
                 for path in (source / 'compaction_requests').glob('*.json')]
     archives.sort(key=lambda item: item['created_at'])
-    chat, updates = rebuild(read_rows(source / 'chat_history.jsonl'),
-                            read_rows(source / 'updates.jsonl'), safe_tail_turns,
+    source_chat = read_rows(source / 'chat_history.jsonl')
+    chat, updates = rebuild(source_chat, read_rows(source / 'updates.jsonl'), safe_tail_turns,
                             [item['chat_history'] for item in archives])
+    if current_chat_only:
+        chat = compact_current_chat(source_chat, safe_tail_turns)
     output.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix='.grok-building-', dir=output.parent))
     original = output / 'original' / source.name
@@ -234,7 +260,7 @@ def build_candidate(source, output, safe_tail_turns=1):
         if inventory(backup) != before or inventory(source) != before:
             raise ValueError('Source changed during backup; candidate not created')
         report = finish_candidate(source, original, candidate, staging, before, metadata,
-                                  chat, updates, safe_tail_turns)
+                                  chat, updates, safe_tail_turns, current_chat_only)
         staging.rename(output)
     finally:
         if staging.exists():
@@ -243,7 +269,7 @@ def build_candidate(source, output, safe_tail_turns=1):
 
 
 def finish_candidate(source, original, final_candidate, staging, before, metadata,
-                     chat, updates, safe_tail_turns):
+                     chat, updates, safe_tail_turns, current_chat_only=False):
     candidate = staging / 'compacted' / source.name
     shutil.copytree(staging / 'original' / source.name, candidate)
     write_rows(candidate / 'chat_history.jsonl', chat)
@@ -256,11 +282,15 @@ def finish_candidate(source, original, final_candidate, staging, before, metadat
         raise ValueError('Validation failed or source changed; do not use candidate')
     after = inventory(candidate)
     report = {'source': str(source), 'original_copy': str(original), 'compacted_copy': str(final_candidate),
-              'profile': 'grok-chat-v1', 'safe_tail_turns': safe_tail_turns,
+              'profile': ('grok-current-chat' if current_chat_only else 'grok-chat-v1'),
+              'safe_tail_turns': safe_tail_turns,
               'source_files': before, 'candidate_files': after,
               'bytes_saved': sum(x['bytes'] for x in before.values()) - sum(x['bytes'] for x in after.values()),
               'chat_records': len(chat), 'update_records': len(updates),
-              'policy': 'verbatim old dialogue; native tail; old update tool payloads emptied; auxiliary files retained'}
+              'policy': ('current chat summaries/dialogue; native tail; old machine rows removed; '
+                         'old update tool payloads emptied; auxiliary files retained'
+                         if current_chat_only else
+                         'verbatim old dialogue; native tail; old update tool payloads emptied; auxiliary files retained')}
     manifest = staging / 'manifest.json'
     manifest.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
     return report
@@ -271,8 +301,11 @@ def main():
     parser.add_argument('session', help='Closed Grok session directory')
     parser.add_argument('--output-root', required=True, help='New backup/candidate/report directory')
     parser.add_argument('--safe-tail-turns', type=int, default=1)
+    parser.add_argument('--current-chat-only', action='store_true',
+                        help='Compact the loaded chat without restoring archived dialogue')
     args = parser.parse_args()
-    report = build_candidate(args.session, args.output_root, args.safe_tail_turns)
+    report = build_candidate(args.session, args.output_root, args.safe_tail_turns,
+                             args.current_chat_only)
     print(json.dumps({key: report[key] for key in
                      ('source', 'original_copy', 'compacted_copy', 'bytes_saved', 'chat_records')}, indent=2))
 

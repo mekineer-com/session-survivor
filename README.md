@@ -81,6 +81,10 @@ Grok: exit the session first, then provide its directory and a NEW output direct
 python3 chat_grok_session.py /path/to/grok/session-uuid --output-root outputs/grok-maintenance-unique
 ```
 
+For a session already carrying v3/native summaries, add `--current-chat-only`.
+It compacts only the loaded chat instead of restoring archived dialogue that the
+summaries replaced.
+
 Read-only usage report (safe while Grok is open; defaults to the latest session):
 
 ```sh
