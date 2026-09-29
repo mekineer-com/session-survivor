@@ -12,6 +12,9 @@ It produces smaller, native-format session candidates for Codex, Claude Code, Gr
 
 Questions and ideas: [Discussions](https://github.com/mekineer-com/session-survivor/discussions). Bugs: [Issues](https://github.com/mekineer-com/session-survivor/issues).
 
+See [When to Run Session Survivor](SESSION_SURVIVOR_CADENCE_RESEARCH.md) for
+vendor guidance, research evidence, and the local inspection cadence.
+
 ## Status
 
 This repo is actively used script tooling, not a packaged release.
