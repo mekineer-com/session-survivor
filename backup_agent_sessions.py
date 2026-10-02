@@ -229,12 +229,12 @@ def restic(args, env_file, log):
         subprocess.run(command, stdout=handle, stderr=subprocess.STDOUT, check=True)
 
 
-def backup(entries, home, run):
+def backup(entries, home, run, env_file=None):
     print('Checking and copying selected closed sessions...', flush=True)
     manifest = freeze(entries, home, run)
     file_list = run / 'files.txt'
     file_list.write_text('\n'.join(item['frozen'] for item in manifest) + '\n' + str(run / 'manifest.json') + '\n')
-    env_file = home / '.config/restic/mega.env'
+    env_file = env_file or home / '.config/restic/backup.env'
     print('Uploading selected closed sessions...', flush=True)
     restic(['backup', '--files-from-verbatim', str(file_list), '--tag', 'team-sessions', '--json'], env_file, run / 'backup.log')
     summaries = [json.loads(line) for line in (run / 'backup.log').read_text().splitlines() if line.startswith('{')]
@@ -253,12 +253,14 @@ def backup(entries, home, run):
 
 
 def dialog(*args):
-    return subprocess.run(['yad', '--title=MEGA Agent Backup', '--no-markup', *args], capture_output=True, text=True)
+    return subprocess.run(['yad', '--title=Agent Session Backup', '--no-markup', *args], capture_output=True, text=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--catalog', type=Path, default=Path.home() / '.config/restic/agent-sessions.json')
+    parser.add_argument('--restic-env', type=Path, default=Path.home() / '.config/restic/backup.env',
+                        help='Trusted shell environment selecting repository and password file')
     parser.add_argument('--check', action='store_true', help='List process status only; do not read/copy session histories')
     args = parser.parse_args()
     home = Path.home()
@@ -276,7 +278,7 @@ def main():
     selected = dialog('--list', '--checklist', '--width=780', '--height=450', '--column=Back up:CHK',
                       '--column=Agent', '--column=CLI', '--column=Status when opened', '--column=Index', '--hide-column=5',
                       '--print-column=5', '--separator=\n', '--button=Cancel:1', '--button=Back Up Selected:0',
-                      '--text=Select sessions to back up. Exit selected agents first, including Aster.\nStatus is rechecked on click. No compaction or shutdown. Older backups are kept.', *rows)
+                      '--text=Select sessions to back up. Exit selected agents first.\nStatus is rechecked on click. No compaction or shutdown. Older backups are kept.', *rows)
     if selected.returncode != 0 or not selected.stdout.strip():
         return
     chosen = [entries[int(index)] for index in selected.stdout.split()]
@@ -287,7 +289,7 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         run = Path(tempfile.mkdtemp(prefix=datetime.now().strftime('%Y%m%d-%H%M%S-'), dir=base))
         try:
-            snapshot = backup(chosen, home, run)
+            snapshot = backup(chosen, home, run, args.restic_env.expanduser())
         except Exception as error:
             raise RuntimeError(str(error) + '\nDetails: ' + str(run)) from error
         dialog('--info', '--text=Backup verified: ' + snapshot[:8] + '\n' + ', '.join(e['name'] for e in chosen)

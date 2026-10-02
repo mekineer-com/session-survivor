@@ -138,7 +138,7 @@ class SessionBackupTest(unittest.TestCase):
         repository = self.home / 'repository'
         env = dict(os.environ, RESTIC_REPOSITORY=str(repository), RESTIC_PASSWORD_FILE=str(password))
         subprocess.run(['restic', 'init'], env=env, check=True, capture_output=True)
-        (config / 'mega.env').write_text(f'export RESTIC_REPOSITORY="{repository}"\nexport RESTIC_PASSWORD_FILE="{password}"\n')
+        (config / 'backup.env').write_text(f'export RESTIC_REPOSITORY="{repository}"\nexport RESTIC_PASSWORD_FILE="{password}"\n')
         supporting = self.home / '.claude/file-history' / SID / 'backup@v1'
         supporting.parent.mkdir(parents=True)
         supporting.write_bytes(b'original rewind content')

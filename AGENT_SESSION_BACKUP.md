@@ -7,19 +7,39 @@ separate manual operation. Previous remote snapshots are never removed.
 
 ## Use
 
-1. Open **MEGA Agent Backup** from the desktop application menu.
+1. Launch `python3 backup_agent_sessions.py` or a desktop entry invoking it.
 2. Check the sessions you want. All catalog entries start checked; uncheck any
    you do not want. Close those agents before clicking **Back Up Selected**.
 3. Wait for **Backup verified**. An open/uncertain session blocks the entire
    selection rather than silently skipping it. You can open the chooser before
    closing agents; status is rechecked when you click.
 
-The application runs independently after Aster exits. A terminal shows the
+The application runs independently after the selected agents exit. A terminal shows the
 copy/upload/restore phases. Closing the chooser or selecting Cancel does nothing.
 
-Requires Python 3.11+, Restic, rclone, and YAD on Linux. Use the current user,
-not root. The repository credentials remain in `~/.config/restic/mega.env`.
+Requires Python 3.11+, Restic, and YAD on Linux; rclone only for rclone backends.
+Use the current user, not root. The repository and password-file settings remain
+in private `~/.config/restic/backup.env`, or a file selected by `--restic-env`.
 The script sources this existing trusted shell environment without printing it.
+
+## Destination
+
+Use any initialized Restic backend: local storage, SFTP, S3, or an rclone remote
+(including MEGA). The tool never embeds a remote address, account, or password.
+For example, a private environment file can contain:
+
+```sh
+export RESTIC_REPOSITORY=/path/to/encrypted-repository
+export RESTIC_PASSWORD_FILE=/path/to/private-password-file
+```
+
+Point a desktop entry at your chosen environment without changing the code:
+
+```sh
+python3 backup_agent_sessions.py --restic-env /path/to/private-backup.env
+```
+
+Keep this environment file and the session catalog outside the source repository.
 
 ## Catalog
 
