@@ -121,6 +121,9 @@ Tested installed Claude Code **2.1.280** with fictional native dialogue and a
 - Restored only the JSONL into its escaped-project directory, then removed the
   synthetic source home. Neither `.claude.json`, a last-session pointer, jobs,
   daemon state nor PID/session registry was restored.
+- Project-directory escaping replaces non-ASCII-alphanumeric characters with
+  `-`, including `/`, `_` and `.`. Replacing only slashes made the probe fail
+  to find a valid transcript when its temporary workspace contained punctuation.
 - `--bare --resume <UUID>` and `--bare --resume SyntheticRestore` both sent the
   earlier dialogue to the localhost model and completed a response under the
   original session UUID. The title inside JSONL was enough for name lookup.

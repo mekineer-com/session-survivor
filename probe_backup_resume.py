@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import shutil
 import subprocess
 import tempfile
@@ -19,7 +20,7 @@ REPLY = 'FICTIONAL_RESTORED_AMBER'
 def main():
     root = Path(tempfile.mkdtemp(prefix='agent-backup-resume-'))
     root.chmod(0o700)
-    workspace = root / 'workspace'
+    workspace = root / 'workspace_with.punctuation'
     workspace.mkdir()
     requests = []
 
@@ -192,7 +193,7 @@ def main():
         sid = '22222222-2222-4222-8222-222222222222'
         original = root / 'claude-original'
         original.mkdir()
-        escaped = str(workspace).replace('/', '-')
+        escaped = re.sub(r'[^a-zA-Z0-9]', '-', str(workspace))
         path = original / '.claude/projects' / escaped / f'{sid}.jsonl'
         path.parent.mkdir(parents=True)
         user_id = '33333333-3333-4333-8333-333333333333'
