@@ -46,23 +46,27 @@ def live_sessions(home, proc=Path('/proc')):
             args = [arg.decode(errors='replace') for arg in args if arg]
             if not args:
                 continue
-            program = Path(args[0]).name
+            program = Path(args[0]).name.lower().removesuffix('.exe')
             kind = next((k for k in ('codex', 'claude', 'grok')
                          if program == k or (k == 'grok' and re.fullmatch(r'grok-\d.*', program))), None)
             if program in ('node', 'nodejs') and len(args) > 1 and Path(args[1]).name == 'codex.js':
                 kind = 'codex'
             if program in ('sh', 'bash') and len(args) > 1 and Path(args[1]).name == 'codex-multi-auth-codex':
                 kind = 'codex'
+            # Launch arguments can outlive an in-process session switch.
+            sid = None
+            registry = home / '.claude/sessions' / (process.name + '.json')
+            if registry.exists():
+                record = json.loads(registry.read_text())
+                start = (process / 'stat').read_text().rsplit(')', 1)[1].split()[19]
+                if str(record.get('procStart')) == start:
+                    kind = 'claude'
+                    try:
+                        sid = str(uuid.UUID(record.get('sessionId', '')))
+                    except (ValueError, TypeError, AttributeError):
+                        sid = None
             if not kind:
                 continue
-            sid = next((arg for arg in args[1:] if re.fullmatch(r'[0-9a-f-]{36}', arg)), None)
-            if kind == 'claude':
-                registry = home / '.claude/sessions' / (process.name + '.json')
-                if registry.exists():
-                    record = json.loads(registry.read_text())
-                    start = (process / 'stat').read_text().rsplit(')', 1)[1].split()[19]
-                    if str(record.get('procStart')) == start:
-                        sid = record.get('sessionId')
             result.append((kind, sid, process.name))
         except (FileNotFoundError, ProcessLookupError):
             continue
@@ -78,7 +82,11 @@ def live_sessions(home, proc=Path('/proc')):
                 os.kill(pid, 0)
             except ProcessLookupError:
                 continue
-            result.append(('grok', record.get('session_id'), str(record['pid'])))
+            try:
+                sid = str(uuid.UUID(record.get('session_id', '')))
+            except (ValueError, TypeError, AttributeError):
+                sid = None
+            result.append(('grok', sid, str(record['pid'])))
     return result
 
 
@@ -98,6 +106,8 @@ def session_files(entry, home):
         roots += [source.with_suffix(''), home / '.claude/file-history' / entry['session_id']]
     files = []
     for root in roots:
+        if root.is_symlink():
+            raise ValueError('Session contains a symlink; review before backing up')
         if not root.exists():
             if root == source:
                 raise FileNotFoundError('Missing session: ' + entry['name'])
@@ -110,12 +120,32 @@ def session_files(entry, home):
     return files
 
 
+def rewind_files(value):
+    names = set()
+    if isinstance(value, dict):
+        if value.get('backupFileName') is not None:
+            name = value['backupFileName']
+            if not isinstance(name, str) or Path(name).name != name or name in ('.', '..'):
+                raise ValueError('Invalid Claude rewind backup reference')
+            names.add(name)
+        for child in value.values():
+            names.update(rewind_files(child))
+    elif isinstance(value, list):
+        for child in value:
+            names.update(rewind_files(child))
+    return names
+
+
 def validate_session(entry, home):
     source, sid = entry['path'], entry['session_id']
     if entry['kind'] == 'grok':
         if json.loads((source / 'summary.json').read_text())['info']['id'] != sid:
             raise ValueError('Grok identity mismatch')
+        for name in ('chat_history.jsonl', 'updates.jsonl'):
+            if not (source / name).is_file():
+                raise ValueError('Missing Grok native history: ' + name)
     last_timestamp, identity_found = None, False
+    dialogue_found, rewinds = False, set()
     for path in session_files(entry, home):
         if path.suffix != '.jsonl':
             continue
@@ -127,8 +157,23 @@ def validate_session(entry, home):
                         raise ValueError(entry['name'] + ' redirects to another session; review the catalog')
                     if obj.get('type') == 'session_meta':
                         identity_found = obj['payload']['id'] == sid
+                    if entry['kind'] == 'claude':
+                        if obj.get('type') in ('user', 'assistant'):
+                            dialogue_found = True
+                            if obj.get('sessionId') not in (None, sid):
+                                raise ValueError('Claude conversation identity mismatch')
+                            identity_found |= obj.get('sessionId') == sid
+                        if str(obj.get('type', '')).startswith('file-history'):
+                            rewinds.update(rewind_files(obj))
                     if obj.get('timestamp'):
                         last_timestamp = obj['timestamp']
+    if entry['kind'] == 'claude':
+        if not identity_found or not dialogue_found:
+            raise ValueError('Claude conversation identity or dialogue missing')
+        for name in rewinds:
+            path = home / '.claude/file-history' / sid / name
+            if not path.is_file() or path.is_symlink():
+                raise ValueError('Missing Claude rewind backup: ' + name)
     if entry['kind'] == 'codex':
         if not identity_found or not last_timestamp:
             raise ValueError('Codex identity or timestamp missing')
@@ -154,17 +199,20 @@ def freeze(entries, home, run):
     require_closed(entries, home)
     for entry in entries:
         validate_session(entry, home)
+    sources = [(entry, source) for entry in entries for source in session_files(entry, home)]
+    required = 2 * sum(source.stat().st_size for entry, source in sources) + 64 * 1024**2
+    if shutil.disk_usage(run).free < required:
+        raise RuntimeError('Not enough free disk for temporary copies and restore verification')
     manifest = []
-    for entry in entries:
-        for source in session_files(entry, home):
-            before = digest(source)
-            target = run / 'tree' / source.relative_to('/')
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
-            if digest(target) != before or digest(source) != before:
-                raise RuntimeError('Session changed while copying; no upload: ' + entry['name'])
-            manifest.append({'agent': entry['name'], 'source': str(source),
-                             'frozen': str(target), 'sha256': before})
+    for entry, source in sources:
+        before = digest(source)
+        target = run / 'tree' / source.relative_to('/')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        if digest(target) != before or digest(source) != before:
+            raise RuntimeError('Session changed while copying; no upload: ' + entry['name'])
+        manifest.append({'agent': entry['name'], 'source': str(source),
+                         'frozen': str(target), 'sha256': before})
     require_closed(entries, home)
     current = [source for entry in entries for source in session_files(entry, home)]
     if [str(path) for path in current] != [item['source'] for item in manifest]:
@@ -218,7 +266,7 @@ def main():
     running = live_sessions(home)
     rows = []
     for index, entry in enumerate(entries):
-        state = 'Running - exit first' if any(k == entry['kind'] and (sid is None or sid == entry['session_id'])
+        state = 'Close ' + entry['kind'] + ' agents first' if any(k == entry['kind'] and (sid is None or sid == entry['session_id'])
                                              for k, sid, pid in running) else 'No running process detected'
         if args.check:
             print(entry['name'] + ': ' + state)

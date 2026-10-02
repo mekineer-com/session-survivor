@@ -4,7 +4,9 @@ from pathlib import Path
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -40,13 +42,51 @@ class SessionBackupTest(unittest.TestCase):
         process.mkdir(parents=True)
         (process / 'cmdline').write_bytes(b'codex\0resume\0' + SID.encode() + b'\0')
         entries = [dict(self.entry, kind='codex'), dict(self.entry, kind='codex', name='Other', session_id=OTHER)]
-        with self.assertRaisesRegex(RuntimeError, '^Exit these agents first: Test agent$'):
+        with self.assertRaisesRegex(RuntimeError, 'Test agent, Other'):
             app.require_closed(entries, self.home, proc)
         (process / 'cmdline').write_bytes(b'codex\0')
         with self.assertRaisesRegex(RuntimeError, 'Test agent, Other'):
             app.require_closed(entries, self.home, proc)
         (process / 'cmdline').write_bytes(b'node\0/tool/codex.js\0resume\0' + SID.encode() + b'\0')
-        self.assertEqual(app.live_sessions(self.home, proc)[0][1], SID)
+        self.assertIsNone(app.live_sessions(self.home, proc)[0][1])
+
+    def test_claude_exe_current_registry_identity(self):
+        proc = self.home / 'proc'
+        process = proc / '123'
+        process.mkdir(parents=True)
+        (process / 'cmdline').write_bytes(b'claude.exe\0--resume\0' + OTHER.encode() + b'\0')
+        (process / 'stat').write_text('123 (claude.exe) S ' + '0 ' * 18 + '99')
+        registry = self.home / '.claude/sessions/123.json'
+        registry.parent.mkdir(parents=True)
+        registry.write_text(json.dumps({'procStart': '99', 'sessionId': SID}))
+        self.assertEqual(app.live_sessions(self.home, proc), [('claude', SID, '123')])
+        (process / 'cmdline').write_bytes(b'/tool/versions/2.1.280\0--resume\0' + OTHER.encode() + b'\0')
+        self.assertEqual(app.live_sessions(self.home, proc), [('claude', SID, '123')])
+        with self.assertRaisesRegex(RuntimeError, 'Test agent'):
+            app.require_closed([self.entry], self.home, proc)
+
+    def test_root_symlink_wrong_identity_and_missing_rewind(self):
+        artifacts = self.source.with_suffix('')
+        unrelated = self.home / 'unrelated'
+        unrelated.mkdir()
+        (unrelated / 'secret.txt').write_text('must not upload')
+        artifacts.symlink_to(unrelated, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, 'symlink'):
+            app.session_files(self.entry, self.home)
+        artifacts.unlink()
+        self.source.write_text(json.dumps({'type': 'user', 'sessionId': OTHER}) + '\n')
+        with self.assertRaisesRegex(ValueError, 'identity mismatch'):
+            app.validate_session(self.entry, self.home)
+        self.source.write_text(json.dumps({'type': 'user', 'sessionId': SID}) + '\n' + json.dumps(
+            {'type': 'file-history-snapshot', 'snapshot': {'trackedFileBackups': {'source.txt': {'backupFileName': 'backup@v1'}}}}) + '\n')
+        with self.assertRaisesRegex(ValueError, 'Missing Claude rewind'):
+            app.validate_session(self.entry, self.home)
+
+    def test_insufficient_disk_blocks_upload(self):
+        with patch.object(app, 'live_sessions', return_value=[]), patch.object(app.shutil, 'disk_usage', return_value=type('Disk', (), {'free': 1})()), patch.object(app, 'restic') as upload:
+            with self.assertRaisesRegex(RuntimeError, 'Not enough free disk'):
+                app.backup([self.entry], self.home, self.run)
+            upload.assert_not_called()
 
     def test_changed_source_prevents_upload(self):
         copy = shutil.copy2
@@ -57,6 +97,23 @@ class SessionBackupTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'changed while copying'):
                 app.backup([self.entry], self.home, self.run)
             upload.assert_not_called()
+
+    def test_real_process_refused_with_synthetic_session(self):
+        process = subprocess.Popen(['codex', '-c', 'import time; time.sleep(30)'], executable=sys.executable)
+        try:
+            for attempt in range(30):
+                if any(k == 'codex' and pid == str(process.pid) for k, sid, pid in app.live_sessions(self.home)):
+                    break
+                time.sleep(0.02)
+            else:
+                self.fail('Synthetic live process was not identified')
+            with patch.object(app, 'restic') as upload:
+                with self.assertRaisesRegex(RuntimeError, 'Exit these agents'):
+                    app.backup([dict(self.entry, kind='codex')], self.home, self.run)
+                upload.assert_not_called()
+        finally:
+            process.terminate()
+            process.wait(timeout=5)
 
     def test_codex_stale_history_and_claude_redirect(self):
         source = self.home / '.codex/sessions' / ('rollout-' + SID + '.jsonl')
