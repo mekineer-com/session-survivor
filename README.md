@@ -487,6 +487,8 @@ Session chaining (what this means):
 
 ## Files
 
+- `backup_agent_sessions.py` / [Checkbox Agent Backup](AGENT_SESSION_BACKUP.md)
+  - optional desktop selector for verified encrypted backups of closed native sessions; no maintenance or shutdown
 - `CLAUDE_SESSION_ANALYSIS.md`
   - native Claude format, background/fork lifecycle, supporting state and recovery safeguards
 - `CODEX_SESSION_ANALYSIS.md`
