@@ -112,3 +112,27 @@ Do not equate a successful CLI exit code with having stopped the intended worker
 After recovery, verify the saved candidate again. Native validation is not a
 live UI acceptance test: confirm resume shows the expected conversation without
 sending an unnecessary extra message or using real history as synthetic test data.
+
+## Transcript-Only Backup Restore (2026-10-02)
+
+Tested installed Claude Code **2.1.280** with fictional native dialogue and a
+`custom-title` row in isolated homes. See [`probe_backup_resume.py`](probe_backup_resume.py).
+
+- Restored only the JSONL into its escaped-project directory, then removed the
+  synthetic source home. Neither `.claude.json`, a last-session pointer, jobs,
+  daemon state nor PID/session registry was restored.
+- `--bare --resume <UUID>` and `--bare --resume SyntheticRestore` both sent the
+  earlier dialogue to the localhost model and completed a response under the
+  original session UUID. The title inside JSONL was enough for name lookup.
+- A separate fresh profile restored with the fictional transcript and OAuth
+  credentials completed a real, non-bare one-turn resume. The final answer
+  recalled the earlier marker; `session_id` stayed unchanged and
+  `is_error=false`. The `sonnet` alias resolved to `claude-sonnet-5`.
+
+**Backup implication:** no additional global resume pointer or worker registry
+is required for this tested ordinary resume path. Keep the native transcript
+and its title/model/ancestry metadata. Config/authentication are separate
+machine-backup concerns. Supporting artifacts and file-history backups remain
+in the checkbox app's existing scope: this text-only test does not establish
+that they are dispensable for attachments or file rewind. Background-job
+reattachment and full-machine recovery were not certified. No scope change.

@@ -116,3 +116,16 @@ python3 -m unittest -v test_backup_agent_sessions.py
 ```
 
 No test reads, transforms, or uploads the user's conversation histories.
+
+## Native Resume Evidence
+
+`python3 probe_backup_resume.py` tests fresh-profile restoration with synthetic
+sessions and localhost model responses only; it retains private evidence under
+`/tmp`. It requires all three CLIs installed and makes no paid model calls.
+Separate authorized real-provider checks also completed restored turns on
+2026-10-02. No additional global resume database/registry was needed for these
+ordinary dialogue tests; **Codex custom names were lost without their separate
+index**, while UUID resume worked. This is not a full-machine or rewind test.
+Details: [Codex](CODEX_SESSION_ANALYSIS.md#transcript-only-backup-restore-2026-10-02),
+[Claude](CLAUDE_SESSION_ANALYSIS.md#transcript-only-backup-restore-2026-10-02),
+[Grok](GROK_SESSION_ANALYSIS.md#session-folder-only-backup-restore-2026-10-02).

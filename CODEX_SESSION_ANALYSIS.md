@@ -78,3 +78,29 @@ In [chat_codex_v3.py](/home/marcos/apps-codex/session-survivor/chat_codex_v3.py)
 - Codex path does not inject a fresh AGENTS file from disk during compaction.
 - Swap/rollback remains manual.
 - There is no `--strip-web-searches` flag in current Codex compactor.
+
+## Transcript-Only Backup Restore (2026-10-02)
+
+Tested installed Codex CLI **0.159.3** in disposable homes with fictional
+dialogue, not copied real conversations. See [`probe_backup_resume.py`](probe_backup_resume.py).
+
+- A fresh `CODEX_HOME` containing only the native rollout and minimal config,
+  without any restored SQLite databases, listed the session and loaded its
+  dialogue through `thread/read` and `thread/resume` by UUID.
+- Native `turn_context` recovered model `gpt-6.1-sol` and effort `medium` without
+  resume overrides. The CLI created fresh state databases itself.
+- A name assigned through `thread/name/set` survived in the original test
+  profile but **did not survive transcript-only restoration**. Custom names
+  have separate `session_index.jsonl`/state storage. UUID resume still worked.
+- A separate fresh profile, restored with only the fictional rollout plus
+  authentication, completed a real `codex exec resume` turn on `gpt-6.1-sol`.
+  Its final answer correctly recalled the marker from earlier dialogue, with
+  the same thread UUID. No tools were called.
+
+**Backup implication:** no old SQLite database is required for this tested
+ordinary conversation-resume path. Keep native rollout metadata and turn
+records intact. Config/authentication remain separate machine-backup concerns;
+the checkbox app is not an account migration tool. Custom names are an optional
+loss, not evidence that the conversation is unrecoverable. No backup scope was
+expanded. Goals, queues, background workers, attachments and full-machine
+recovery were not certified by this simple-dialogue test.
