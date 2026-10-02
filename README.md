@@ -384,6 +384,9 @@ Runtime note:
 
 ### Claude
 
+Format, fork recovery, session pointers and rewind backups:
+[`CLAUDE_SESSION_ANALYSIS.md`](CLAUDE_SESSION_ANALYSIS.md).
+
 Current `safe` trimming targets:
 
 - remove all `thinking` blocks from `message.content` (avoids signed-thinking compaction failures)
@@ -484,6 +487,8 @@ Session chaining (what this means):
 
 ## Files
 
+- `CLAUDE_SESSION_ANALYSIS.md`
+  - native Claude format, background/fork lifecycle, supporting state and recovery safeguards
 - `CODEX_SESSION_ANALYSIS.md`
   - current Codex failure-mode analysis and implemented safeguards
 - `CODEX_SESSION_SURVIVOR_RUNBOOK.md`
