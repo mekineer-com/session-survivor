@@ -73,6 +73,8 @@ python3 backup_agent_sessions.py --check
   registry, and Grok's active-session registry. An unidentified live CLI blocks
   its entire harness. Idle or suspended still means running. PID inspection
   failures block, not assume closed.
+- Executable identity is checked as well as launch names, including Grok's
+  `agent` alias and version-path Claude binaries without a registry record.
 - Launch IDs are not trusted after in-process switches. Selected Codex backups
   require all Codex processes closed; Claude's current PID/start-time registry
   can identify its session. Unknown identities remain a conservative block.
@@ -85,10 +87,15 @@ python3 backup_agent_sessions.py --check
 - Claude dialogue identity and referenced rewind backups are checked. Missing
   rewind assets or Grok native history files require investigation, not a
   successful-but-incomplete backup. Symlinked roots/descendants are refused.
-- Validates JSONL, copies selected files into a private staging tree, rechecks
+- Imported native history may carry other session IDs; positive selected-session
+  identity is required, not uniform identity on every historical row.
+- Copies selected files into a private staging tree, validates those frozen
+  JSONL bytes, rechecks
   processes, file membership and hashes. Reopening or writing during the copy
   can abort; keep selected agents closed until staging finishes. Process checks
   are conservative observations, not a lock on the external CLI.
+- Validation errors identify the selected agent that failed. Damaged JSONL still
+  blocks upload; preserving it remotely with a warning is a separate policy choice.
 - Uploads only frozen files plus their mapping/hash manifest, tagged
   `team-sessions`. Then restores every uploaded file and verifies its bytes.
 - Free disk must cover two temporary copies plus 64 MiB overhead before copying.

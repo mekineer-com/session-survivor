@@ -75,7 +75,7 @@ class SessionBackupTest(unittest.TestCase):
             app.session_files(self.entry, self.home)
         artifacts.unlink()
         self.source.write_text(json.dumps({'type': 'user', 'sessionId': OTHER}) + '\n')
-        with self.assertRaisesRegex(ValueError, 'identity mismatch'):
+        with self.assertRaisesRegex(ValueError, 'identity'):
             app.validate_session(self.entry, self.home)
         self.source.write_text(json.dumps({'type': 'user', 'sessionId': SID}) + '\n' + json.dumps(
             {'type': 'file-history-snapshot', 'snapshot': {'trackedFileBackups': {'source.txt': {'backupFileName': 'backup@v1'}}}}) + '\n')
@@ -94,6 +94,45 @@ class SessionBackupTest(unittest.TestCase):
             copy(source, target)
             source.write_text(source.read_text() + '{}\n')
         with patch.object(app, 'live_sessions', return_value=[]), patch.object(app.shutil, 'copy2', side_effect=mutate), patch.object(app, 'restic') as upload:
+            with self.assertRaisesRegex(RuntimeError, 'changed while copying'):
+                app.backup([self.entry], self.home, self.run)
+            upload.assert_not_called()
+
+    def test_native_imported_dialogue_preserved(self):
+        imported = json.dumps({'type': 'user', 'sessionId': OTHER, 'message': {'content': 'Synthetic imported context'}}) + '\n'
+        original = imported + self.source.read_text()
+        self.source.write_text(original)
+        with patch.object(app, 'live_sessions', return_value=[]):
+            manifest = app.freeze([self.entry], self.home, self.run)
+        self.assertEqual(Path(manifest[0]['frozen']).read_text(), original)
+        self.assertEqual(self.source.read_text(), original)
+
+    def test_invalid_history_error_names_agent(self):
+        self.source.write_text('{invalid synthetic history\n')
+        with patch.object(app, 'live_sessions', return_value=[]), patch.object(app, 'restic') as upload:
+            with self.assertRaisesRegex(RuntimeError, 'Test agent:'):
+                app.backup([self.entry], self.home, self.run)
+            upload.assert_not_called()
+
+    def test_grok_alias_and_unregistered_claude_executable(self):
+        proc = self.home / 'proc'
+        process = proc / '123'
+        process.mkdir(parents=True)
+        (process / 'cmdline').write_bytes(b'agent\0')
+        (process / 'exe').symlink_to('/tool/downloads/grok-1.0.46-linux-x86_64')
+        self.assertEqual(app.live_sessions(self.home, proc), [('grok', None, '123')])
+        (process / 'exe').unlink()
+        (process / 'cmdline').write_bytes(b'/tool/claude/versions/2.1.280\0')
+        (process / 'exe').symlink_to('/tool/claude/versions/2.1.280')
+        self.assertEqual(app.live_sessions(self.home, proc), [('claude', None, '123')])
+
+    def test_validation_reads_frozen_bytes_and_detects_later_source_change(self):
+        validate = app.validate_session
+        def mutate_and_validate(entry, home, frozen_root):
+            self.assertIsNotNone(frozen_root)
+            self.source.write_text('{broken after copying\n')
+            validate(entry, home, frozen_root)
+        with patch.object(app, 'live_sessions', return_value=[]), patch.object(app, 'validate_session', side_effect=mutate_and_validate), patch.object(app, 'restic') as upload:
             with self.assertRaisesRegex(RuntimeError, 'changed while copying'):
                 app.backup([self.entry], self.home, self.run)
             upload.assert_not_called()
@@ -125,6 +164,14 @@ class SessionBackupTest(unittest.TestCase):
             con.execute('CREATE TABLE threads (id TEXT, rollout_path TEXT, updated_at_ms INTEGER)')
             con.execute('INSERT INTO threads VALUES (?, ?, ?)', (SID, str(source), 1767226301000))
         with self.assertRaisesRegex(ValueError, 'lags the database'):
+            app.validate_session(entry, self.home)
+        with sqlite3.connect(database) as con:
+            con.execute('UPDATE threads SET updated_at_ms=?', (1767225600000,))
+        inherited = json.dumps({'type': 'session_meta', 'payload': {'id': OTHER}, 'timestamp': '2026-01-01T00:00:00Z'}) + '\n'
+        source.write_text(source.read_text() + inherited)
+        app.validate_session(entry, self.home)
+        source.write_text(inherited)
+        with self.assertRaisesRegex(ValueError, 'Codex identity'):
             app.validate_session(entry, self.home)
         self.source.write_text('{"type":"continued-in"}\n')
         with self.assertRaisesRegex(ValueError, 'redirects'):

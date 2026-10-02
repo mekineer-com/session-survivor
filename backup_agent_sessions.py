@@ -47,8 +47,18 @@ def live_sessions(home, proc=Path('/proc')):
             if not args:
                 continue
             program = Path(args[0]).name.lower().removesuffix('.exe')
+            names = [program]
+            executable = None
+            try:
+                executable = (process / 'exe').readlink()
+                names.append(executable.name.removesuffix(' (deleted)').lower().removesuffix('.exe'))
+            except FileNotFoundError:
+                pass
             kind = next((k for k in ('codex', 'claude', 'grok')
-                         if program == k or (k == 'grok' and re.fullmatch(r'grok-\d.*', program))), None)
+                         if any(name == k or (k == 'grok' and re.fullmatch(r'grok-\d.*', name))
+                                for name in names)), None)
+            if executable and executable.parent.name == 'versions' and executable.parent.parent.name == 'claude':
+                kind = 'claude'
             if program in ('node', 'nodejs') and len(args) > 1 and Path(args[1]).name == 'codex.js':
                 kind = 'codex'
             if program in ('sh', 'bash') and len(args) > 1 and Path(args[1]).name == 'codex-multi-auth-codex':
@@ -82,6 +92,8 @@ def live_sessions(home, proc=Path('/proc')):
                 os.kill(pid, 0)
             except ProcessLookupError:
                 continue
+            except PermissionError as error:
+                raise RuntimeError(f'Cannot inspect Grok registered PID {pid}; verify that session is closed') from error
             try:
                 sid = str(uuid.UUID(record.get('session_id', '')))
             except (ValueError, TypeError, AttributeError):
@@ -136,8 +148,11 @@ def rewind_files(value):
     return names
 
 
-def validate_session(entry, home):
-    source, sid = entry['path'], entry['session_id']
+def validate_session(entry, home, frozen_root=None):
+    def stored(path):
+        return frozen_root / path.relative_to('/') if frozen_root else path
+
+    source, sid = stored(entry['path']), entry['session_id']
     if entry['kind'] == 'grok':
         if json.loads((source / 'summary.json').read_text())['info']['id'] != sid:
             raise ValueError('Grok identity mismatch')
@@ -146,22 +161,21 @@ def validate_session(entry, home):
                 raise ValueError('Missing Grok native history: ' + name)
     last_timestamp, identity_found = None, False
     dialogue_found, rewinds = False, set()
-    for path in session_files(entry, home):
+    for original in session_files(entry, home):
+        path = stored(original)
         if path.suffix != '.jsonl':
             continue
-        with path.open() as handle:
+        with path.open(encoding='utf-8') as handle:
             for line in handle:
                 obj = json.loads(line)
                 if path == source and isinstance(obj, dict):
                     if obj.get('type') == 'continued-in':
                         raise ValueError(entry['name'] + ' redirects to another session; review the catalog')
                     if obj.get('type') == 'session_meta':
-                        identity_found = obj['payload']['id'] == sid
+                        identity_found |= obj['payload']['id'] == sid
                     if entry['kind'] == 'claude':
                         if obj.get('type') in ('user', 'assistant'):
                             dialogue_found = True
-                            if obj.get('sessionId') not in (None, sid):
-                                raise ValueError('Claude conversation identity mismatch')
                             identity_found |= obj.get('sessionId') == sid
                         if str(obj.get('type', '')).startswith('file-history'):
                             rewinds.update(rewind_files(obj))
@@ -171,7 +185,7 @@ def validate_session(entry, home):
         if not identity_found or not dialogue_found:
             raise ValueError('Claude conversation identity or dialogue missing')
         for name in rewinds:
-            path = home / '.claude/file-history' / sid / name
+            path = stored(home / '.claude/file-history' / sid / name)
             if not path.is_file() or path.is_symlink():
                 raise ValueError('Missing Claude rewind backup: ' + name)
     if entry['kind'] == 'codex':
@@ -183,7 +197,7 @@ def validate_session(entry, home):
         database = max(databases, key=lambda p: int(p.stem.split('_')[-1]))
         with sqlite3.connect(database.as_uri() + '?mode=ro', uri=True) as connection:
             row = connection.execute('SELECT rollout_path, updated_at_ms FROM threads WHERE id=?', (sid,)).fetchone()
-        if not row or Path(row[0]) != source:
+        if not row or Path(row[0]) != entry['path']:
             raise ValueError('Codex database does not point to this session file')
         tail = datetime.fromisoformat(last_timestamp.replace('Z', '+00:00')).timestamp()
         if row[1] / 1000 - tail > 600:
@@ -197,8 +211,6 @@ def digest(path):
 
 def freeze(entries, home, run):
     require_closed(entries, home)
-    for entry in entries:
-        validate_session(entry, home)
     sources = [(entry, source) for entry in entries for source in session_files(entry, home)]
     required = 2 * sum(source.stat().st_size for entry, source in sources) + 64 * 1024**2
     if shutil.disk_usage(run).free < required:
@@ -213,6 +225,11 @@ def freeze(entries, home, run):
             raise RuntimeError('Session changed while copying; no upload: ' + entry['name'])
         manifest.append({'agent': entry['name'], 'source': str(source),
                          'frozen': str(target), 'sha256': before})
+    for entry in entries:
+        try:
+            validate_session(entry, home, run / 'tree')
+        except Exception as error:
+            raise RuntimeError(entry['name'] + ': ' + str(error)) from error
     require_closed(entries, home)
     current = [source for entry in entries for source in session_files(entry, home)]
     if [str(path) for path in current] != [item['source'] for item in manifest]:
