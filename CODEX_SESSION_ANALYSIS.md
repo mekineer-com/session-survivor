@@ -118,3 +118,13 @@ Prune both arrays by the same retained indices. Strip both when hollowing an
 older checkpoint. Reject mismatched input rather than invent metadata. Parseable
 JSON alone is insufficient: validate checkpoint array alignment before swaps.
 Skipping the post-compact ordinary turn was not the cause of this defect.
+
+**Origin traced:** our checkpoint-pruning function landed July 12, 2026 in
+`98bdabd`, before the companion metadata existed. Upstream introduced the paired
+format and strict length validation August 11 in `3a6f747d77` (#38058).
+The first such checkpoint preserved in Codex's full backup is October 1 at
+06:31 UTC (01:31 Peru), with 385 history entries and 385 metadata entries.
+The October 9 original also matched (1,112 each); our cleanup broke the pairing.
+This is a format-compatibility regression exposed by newer Codex output, not a
+recent rewrite of our pruning code or a missing post-compact message. These dates
+identify commits and preserved evidence, not the exact release first shipping it.
