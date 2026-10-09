@@ -195,6 +195,11 @@ def prune_compacted_replacement_history(
     history = payload.get("replacement_history")
     if not isinstance(history, list):
         return obj
+    metadata = payload.get("replacement_history_metadata")
+    if metadata is not None and (
+        not isinstance(metadata, list) or len(metadata) != len(history)
+    ):
+        raise ValueError("replacement_history_metadata must match replacement_history")
 
     ordinary_user_indices: list[int] = []
     summary_user_indices: set[int] = set()
@@ -209,17 +214,21 @@ def prune_compacted_replacement_history(
     keep_count = max(0, args.keep_replacement_history_user_messages)
     recent_user_indices = set(ordinary_user_indices[-keep_count:]) if keep_count else set()
     new_history: list[Any] = []
+    kept_indices: list[int] = []
     pruned = kept_summary = kept_recent = kept_other = 0
     for idx, item in enumerate(history):
         is_user = isinstance(item, dict) and item.get("type") == "message" and item.get("role") == "user"
         if not is_user:
             new_history.append(item)
+            kept_indices.append(idx)
             kept_other += 1
         elif idx in summary_user_indices:
             new_history.append(item)
+            kept_indices.append(idx)
             kept_summary += 1
         elif idx in recent_user_indices:
             new_history.append(item)
+            kept_indices.append(idx)
             kept_recent += 1
         else:
             pruned += 1
@@ -232,6 +241,8 @@ def prune_compacted_replacement_history(
         return obj
     new_payload = dict(payload)
     new_payload["replacement_history"] = new_history
+    if metadata is not None:
+        new_payload["replacement_history_metadata"] = [metadata[idx] for idx in kept_indices]
     new_obj = dict(obj)
     new_obj["payload"] = new_payload
     return new_obj
@@ -434,6 +445,7 @@ def strip_compacted_replacement_history(obj: dict[str, Any], state: dict[str, in
         return obj
     new_payload = dict(payload)
     new_payload.pop("replacement_history", None)
+    new_payload.pop("replacement_history_metadata", None)
     new_obj = dict(obj)
     new_obj["payload"] = new_payload
     state["stripped_compacted_replacement_history"] += 1

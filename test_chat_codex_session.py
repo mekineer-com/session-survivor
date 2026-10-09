@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from chat_codex_session import compact_chat_records, compact_old_turn, is_continuity_summary_text, main
+from chat_codex_session import compact_chat_records, compact_old_turn, is_continuity_summary_text, main, prune_compacted_replacement_history, strip_compacted_replacement_history
 from compact_codex_session import compact_record
 
 
@@ -65,6 +65,24 @@ def run_candidate(args) -> int:
 
 
 class ChatCodexSessionTest(unittest.TestCase):
+    def test_checkpoint_metadata_stays_paired_with_history(self) -> None:
+        history = [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}
+            for text in ("old", "## Week of Jul 1-7", "recent")
+        ]
+        metadata = [{"marker": i} for i in range(3)]
+        row = {"type": "compacted", "payload": {"replacement_history": history, "replacement_history_metadata": metadata}}
+        args = SimpleNamespace(keep_replacement_history_user_messages=1)
+        pruned = prune_compacted_replacement_history(row, args, defaultdict(int))
+        self.assertEqual(pruned["payload"]["replacement_history"], history[1:])
+        self.assertEqual(pruned["payload"]["replacement_history_metadata"], metadata[1:])
+        stripped = strip_compacted_replacement_history(row, defaultdict(int))
+        self.assertNotIn("replacement_history", stripped["payload"])
+        self.assertNotIn("replacement_history_metadata", stripped["payload"])
+        row["payload"]["replacement_history_metadata"] = metadata[:1]
+        with self.assertRaises(ValueError):
+            prune_compacted_replacement_history(row, args, defaultdict(int))
+
     def test_supported_continuity_summary_labels(self) -> None:
         for text in ("[Codex]\n\n## Week of Jul 1-7", "[Aster]\n\n## Week of Jul 1-7",
                      "## Period of Mar 21-May 30", "[Ari]\n\n## Period of Jun 1-30"):

@@ -104,3 +104,17 @@ the checkbox app is not an account migration tool. Custom names are an optional
 loss, not evidence that the conversation is unrecoverable. No backup scope was
 expanded. Goals, queues, background workers, attachments and full-machine
 recovery were not certified by this simple-dialogue test.
+
+### 2026-10-09 - Aster: checkpoint history and metadata are paired
+
+Current Codex serializes `replacement_history_metadata` beside
+`replacement_history`. The loader rejects unequal lengths and metadata without
+history (`codex-rs/history/src/rollout_payload.rs`, `CompactedItemWire` conversion).
+Our chat cleanup pruned history but retained original metadata, making checkpoints
+unloadable. Codex's resumed request used roughly 300k tokens despite a 6.2 MiB file;
+fallback replay of old chat is consistent with those rejected checkpoints.
+
+Prune both arrays by the same retained indices. Strip both when hollowing an
+older checkpoint. Reject mismatched input rather than invent metadata. Parseable
+JSON alone is insufficient: validate checkpoint array alignment before swaps.
+Skipping the post-compact ordinary turn was not the cause of this defect.
