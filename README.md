@@ -297,8 +297,8 @@ Use this order:
 - tail compaction knobs: `--max-tool-input-chars`, `--max-reasoning-chars`
 - source selection rule: use exactly one source (`--latest` or explicit path)
 - refuses when an explicit source would resolve onto one of its own output paths; use a different `--output-root` for candidate-of-candidate work
-- builds backup, candidate, report, and manifest privately under a per-output lock; removes any old manifest before replacing files and publishes the new manifest last
-- the manifest is the completion seal: without it, artifacts may be absent or mixed across an interrupted rerun and must not be used
+- builds backup, candidate, report, and manifest privately under a per-output lock; refuses existing destinations and publishes the manifest last. Use a fresh `--output-root` for each run
+- the manifest is the completion seal: without it, artifacts from an interrupted publication must not be used
 - usage:
   - `python3 chat_codex_session.py --latest --show-summary`
   - `python3 chat_codex_session.py /path/to/rollout.jsonl`
@@ -391,7 +391,7 @@ Current `safe` trimming targets:
 
 - remove all `thinking` blocks from `message.content` (avoids signed-thinking compaction failures)
 - long `tool_result` string content
-- nested oversized strings anywhere inside `toolUseResult`
+- oversized known output-body fields inside `toolUseResult`; paths, IDs and unknown fields stay intact
 - oversized `system/local_command` content
 - reduce `message.usage` to core counters/tier
 - compact oversized `file-history-snapshot.trackedFileBackups` maps to a bounded entry set while preserving complete metadata for retained entries
@@ -419,7 +419,7 @@ Claude chat-resume mode (`chat_claude_session.py`):
   - command/meta wrapper chatter (`<local-command-caveat>`, `<command-name>`, task notifications)
 - guardrails:
   - selects the active Claude parent chain instead of flattening abandoned branches into chat
-  - refuses to discard detached imported compact summaries; use conservative compaction
+  - refuses to discard detached main conversation history, including earlier chat outputs; use conservative compaction
     for these archives (see [format/recovery reference](CLAUDE_SESSION_ANALYSIS.md#imported-history-and-cleanup-loss))
   - preserves native compact summaries and recent dialogue verbatim
   - refuses duplicate UUIDs, broken parent/tool links, empty dialogue, source/output collisions, and changed sources

@@ -271,17 +271,53 @@ def active_branch_records(records: list[dict[str, Any]], state: dict[str, int]) 
                 raise ValueError("Claude compact boundary has an unresolved logical parent.")
         row = by_uuid.get(parent)
 
-    if any(row.get("isCompactSummary") and row.get("parentUuid") is None
-           and not row.get("isSidechain") and row.get("uuid") not in active for row in records):
-        raise ValueError("Active-branch selection would discard imported archival summaries; use conservative compaction.")
+    for candidate in records:
+        if candidate.get("type") not in ("user", "assistant") or candidate.get("isSidechain"):
+            continue
+        if not candidate.get("uuid") or candidate.get("uuid") in active:
+            continue
+        seen: set[str] = set()
+        row = candidate
+        # ponytail: walk excluded ancestry; cache roots if branching makes this costly.
+        while row is not None and row.get("uuid") not in active:
+            row_uuid = row.get("uuid")
+            if row_uuid in seen:
+                raise ValueError("Claude excluded-branch ancestry has a cycle.")
+            seen.add(row_uuid)
+            parent = row.get("parentUuid")
+            if parent is None and row.get("type") == "system" and row.get("subtype") == "compact_boundary":
+                parent = row.get("logicalParentUuid")
+            row = by_uuid.get(parent)
+        if row is None:
+            raise ValueError("Active-branch selection would discard detached main conversation history; use conservative compaction.")
+
+    children: dict[str, list[str]] = {}
+    for row in records:
+        parent = row.get("parentUuid")
+        if isinstance(parent, str) and row.get("uuid") in by_uuid and row.get("type") not in ("user", "assistant"):
+            children.setdefault(parent, []).append(row["uuid"])
+    pending = [leaf["uuid"]]
+    support: set[str] = set()
+    while pending:
+        for child in children.get(pending.pop(), []):
+            if child not in active:
+                active.add(child)
+                support.add(child)
+                pending.append(child)
 
     selected = [row for row in records if not row.get("uuid") or row.get("uuid") in active]
+    state["_post_leaf_start_index"] = next(
+        (idx for idx, row in enumerate(selected) if row.get("uuid") in support), len(selected)
+    )
     state["dropped_inactive_branch_records"] = len(records) - len(selected)
     return selected
 
 
 def safe_tail_start_index(records: list[dict[str, Any]], tail_turns: int) -> int:
     if tail_turns <= 0:
+        for idx in range(len(records) - 1, -1, -1):
+            if records[idx].get("type") in ("user", "assistant"):
+                return idx + 1
         return len(records)
 
     found = 0
@@ -500,6 +536,8 @@ def main() -> int:
     }
     records = active_branch_records(records, state)
     tail_start = safe_tail_start_index(records, args.safe_tail_turns)
+    if state.pop("_post_leaf_start_index", len(records)) < tail_start:
+        raise ValueError("Native post-leaf support precedes the requested tail; use a larger native tail or conservative compaction.")
     old_records = records[:tail_start]
     tail_records = records[tail_start:]
     state["kept_safe_tail_turns"] = min(args.safe_tail_turns, sum(1 for obj in records if is_user_turn_start(obj)))

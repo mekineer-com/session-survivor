@@ -123,29 +123,19 @@ class ChatCodexSessionTest(unittest.TestCase):
             self.assertEqual(run_candidate(args), 0)
             self.assertTrue(all(path.exists() for path in public_paths))
 
-    def test_failed_rerun_publication_removes_old_manifest_and_can_retry(self) -> None:
+    def test_rerun_refuses_to_replace_previous_backup_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source, output, args, public_paths = candidate_fixture(Path(directory))
             self.assertEqual(run_candidate(args), 0)
+            before = {path: path.read_bytes() for path in public_paths}
             source.write_text(source.read_text(encoding="utf-8").replace("Answer 0", "Changed answer"), encoding="utf-8")
-            real_replace = Path.replace
-            replacements = 0
-
-            def fail_on_third_replace(path, target):
-                nonlocal replacements
-                replacements += 1
-                if replacements == 3:
-                    raise OSError("synthetic publication failure")
-                return real_replace(path, target)
-
-            with patch.object(Path, "replace", autospec=True, side_effect=fail_on_third_replace), self.assertRaises(OSError):
+            with self.assertRaisesRegex(FileExistsError, "fresh output root"):
                 run_candidate(args)
-            self.assertEqual(replacements, 3)
-            self.assertFalse(public_paths[-1].exists())
+            self.assertEqual({path: path.read_bytes() for path in public_paths}, before)
             self.assertEqual(list(output.glob(".building-*")), [])
-
+            args.output_root = str(output / "fresh-run")
             self.assertEqual(run_candidate(args), 0)
-            self.assertTrue(all(path.exists() for path in public_paths))
+            self.assertTrue((Path(args.output_root) / "manifests/synthetic.manifest.json").exists())
 
     def test_refuses_to_overwrite_candidate_used_as_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

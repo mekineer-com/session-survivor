@@ -89,15 +89,19 @@ def relative_output_path(path: pathlib.Path) -> pathlib.Path:
 
 
 def compact_nested_strings(value: Any, max_chars: int, label: str, state: dict[str, int], counter_key: str) -> Any:
-    if isinstance(value, str):
-        compacted, changed = shorten(value, max_chars, label)
-        if changed:
-            state[counter_key] += 1
-        return compacted
     if isinstance(value, list):
         return [compact_nested_strings(v, max_chars, label, state, counter_key) for v in value]
     if isinstance(value, dict):
-        return {k: compact_nested_strings(v, max_chars, label, state, counter_key) for k, v in value.items()}
+        out = {}
+        for key, field in value.items():
+            # Native output bodies are lossy; paths, IDs and unknown fields are not.
+            if key in ("stdout", "stderr", "content", "text", "result", "originalFile", "oldString", "newString") and isinstance(field, str):
+                out[key], changed = shorten(field, max_chars, label)
+                if changed:
+                    state[counter_key] += 1
+            else:
+                out[key] = compact_nested_strings(field, max_chars, label, state, counter_key)
+        return out
     return value
 
 
@@ -126,6 +130,11 @@ def anchor_digest(path: pathlib.Path) -> dict[str, Any]:
 
 
 def compact_tool_use_result(value: Any, max_chars: int, state: dict[str, int]) -> Any:
+    if isinstance(value, str):
+        compacted, changed = shorten(value, max_chars, TOOL_OUTPUT_PLACEHOLDER)
+        if changed:
+            state["tool_outputs_truncated"] += 1
+        return compacted
     return compact_nested_strings(value, max_chars, TOOL_OUTPUT_PLACEHOLDER, state, "tool_outputs_truncated")
 
 
@@ -239,9 +248,11 @@ def validate_claude_records(records: list[dict[str, Any]]) -> None:
 
         if row.get("type") not in ("user", "assistant"):
             continue
+        if not isinstance(row_uuid, str) or not row_uuid.strip():
+            raise ValueError("Claude dialogue has no valid row UUID.")
         message = row.get("message")
-        if not isinstance(message, dict):
-            continue
+        if not isinstance(message, dict) or message.get("role") != row["type"]:
+            raise ValueError("Claude dialogue role must match its record type.")
         content = message.get("content")
         if isinstance(content, str):
             meaningful = meaningful or bool(content.strip())
@@ -256,13 +267,13 @@ def validate_claude_records(records: list[dict[str, Any]]) -> None:
                 meaningful = meaningful or bool(str(block.get("text", "")).strip())
             else:
                 meaningful = True
-            if block_type == "tool_use" and isinstance(block.get("id"), str):
-                if not isinstance(row_uuid, str) or not row_uuid:
-                    raise ValueError("Claude tool invocation has no row UUID.")
+            if block_type in ("tool_use", "server_tool_use", "mcp_tool_use"):
+                if not isinstance(block.get("id"), str) or not block["id"].strip():
+                    raise ValueError("Claude tool invocation has no valid ID.")
                 tool_uses.setdefault(row_uuid, set()).add(block["id"])
-            if block_type == "tool_result" and isinstance(block.get("tool_use_id"), str):
-                if not isinstance(row_uuid, str) or not row_uuid:
-                    raise ValueError("Claude tool result has no row UUID.")
+            if block_type == "tool_result":
+                if not isinstance(block.get("tool_use_id"), str) or not block["tool_use_id"].strip():
+                    raise ValueError("Claude tool result has no valid invocation ID.")
                 tool_results.append((row_uuid, block["tool_use_id"]))
 
     if not meaningful:
@@ -280,10 +291,12 @@ def validate_claude_records(records: list[dict[str, Any]]) -> None:
         metadata = row.get("compactMetadata") or {}
         segment = metadata.get("preservedSegment") or {}
         preserved = metadata.get("preservedMessages") or {}
-        advisory = preserved.get("allUuids")
-        if "allUuids" in preserved and (not isinstance(advisory, list)
-                                     or any(not isinstance(ref, str) or not ref for ref in advisory)):
-            raise ValueError("Claude compact advisory allUuids must be a list of nonempty strings.")
+        for key in ("uuids", "allUuids"):
+            refs = preserved.get(key)
+            if key in preserved and (not isinstance(refs, list)
+                                     or any(not isinstance(ref, str) or not ref.strip() for ref in refs)):
+                label = "advisory allUuids" if key == "allUuids" else "replay uuids"
+                raise ValueError(f"Claude compact {label} must be a list of nonempty strings.")
         references = [row.get("logicalParentUuid"), preserved.get("anchorUuid")]
         references.extend(segment.get(key) for key in ("headUuid", "anchorUuid", "tailUuid"))
         references.extend(preserved.get("uuids", []))

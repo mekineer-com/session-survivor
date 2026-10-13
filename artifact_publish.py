@@ -24,6 +24,8 @@ def publish_artifacts(
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise RuntimeError("Another candidate publication is running.") from exc
+        if any(path.exists() or path.is_symlink() for path, _ in artifacts):
+            raise FileExistsError("Destination artifacts already exist; use a fresh output root.")
         staging = pathlib.Path(tempfile.mkdtemp(prefix=".building-", dir=output_root))
         try:
             staged: dict[pathlib.Path, pathlib.Path] = {}
@@ -34,7 +36,6 @@ def publish_artifacts(
                 staged[final] = path
             if source.read_bytes() != original_bytes:
                 raise RuntimeError("Source changed during candidate generation; outputs were not published.")
-            manifest_path.unlink(missing_ok=True)
             for final, _ in artifacts:
                 final.parent.mkdir(parents=True, exist_ok=True)
                 staged[final].replace(final)

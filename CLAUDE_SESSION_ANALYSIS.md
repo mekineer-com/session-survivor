@@ -1,6 +1,6 @@
 # Claude Code Session Format and Recovery
 
-Verified through 2026-10-12 against Claude Code 2.1.280, the installed loader, and a
+Verified through 2026-10-13 against Claude Code 2.1.280, the installed loader, and a
 closed-session fork restoration. This is a format/recovery reference, not a
 generic merger or a guarantee that later versions keep the same contract.
 
@@ -65,7 +65,8 @@ Earlier chat-only outputs can contain legitimate archival dialogue whose parent
 chains are disconnected. A root or unreachable row is not, by itself, evidence
 of an abandoned rewind. Following compact `logicalParentUuid` fixes native
 boundaries but does not establish preservation of every imported archival root.
-Normal chat cleanup now refuses to discard detached imported compact summaries;
+Normal chat cleanup now refuses to discard detached main conversational roots,
+including ordinary archived dialogue and the script's own earlier chat outputs;
 use conservative compaction for these histories until archival selection is supported.
 Both absent and explicit-null parents represent roots. If advisory `allUuids`
 is present, require a list of nonempty strings, without requiring node membership.
@@ -95,10 +96,18 @@ Tool validation added in `5367e53` (September 14) indexed only `tool_use`.
 Later ordering/ancestry checks retained that omission; tests covered client tools
 but not server tools. A September 20 GLM record from Claude Code 2.1.233 contains
 `server_tool_use` followed by a matching ancestor-linked `tool_result`, which the
-validator falsely rejects. This is incomplete format coverage, not proof of lost
-history or a newly introduced October format. Preserve the stored blocks/parents;
-recognize the server invocation without relaxing ID/ancestry checks. Native wire
-acceptance of provider-specific assistant-side results is a separate question.
+validator falsely rejected. This is incomplete format coverage, not proof of lost
+history or a newly introduced October format. Preserve the stored blocks/parents.
+The validator now indexes `tool_use`, `server_tool_use` and `mcp_tool_use` without
+relaxing ID/ancestry checks. Native wire acceptance of provider-specific
+assistant-side results is a separate question.
+
+October 13 hunk repairs retain post-leaf native supporting records, reject malformed
+dialogue/tool/replay identity, protect path/ID strings during result-body trimming,
+and refuse existing publication destinations so earlier originals are not overwritten.
+Detached archive refusal prevents further loss; it does not restore aggressive
+repeat cleanup for those files. Tool relationships across native preserved-message
+replay still require effective-graph handling, not blanket logical-parent permission.
 
 ## Forks and Redirects
 
