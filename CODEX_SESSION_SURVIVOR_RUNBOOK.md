@@ -9,7 +9,9 @@ MEGA.
 Use `chat_codex_session.py` unless reviewed, authored summaries require the v3
 flow documented in `README.md`.
 
-1. Let Codex compact in-session, exchange one ordinary turn, then `/exit`.
+1. Compact in-session if needed, let the task finish, then `/exit`. A completed
+   compact-only turn is supported; no extra message is required with the current
+   checkpoint-metadata fix.
 2. Confirm the session process is gone. Never transform or swap an open session.
 3. Run from this repository with the exact session path and a new output folder:
 

@@ -36,12 +36,12 @@ advice to compact after major milestones or tool-heavy phases, not every turn.
 Neither source specifies a maximum number of compactions or a cadence for
 rewriting a Codex CLI session file.
 
-For Session Survivor, the validated local timing remains:
+For Session Survivor, the current local timing is:
 
 1. Let Codex compact natively.
-2. Exchange one ordinary turn.
-3. Exit Codex.
-4. Run `chat_codex_session.py` if inspection shows accumulated bulk or poor
+2. Let the compact task finish, then exit Codex. No extra message is required
+   with the checkpoint-metadata alignment fix; compact-only completed turns are supported.
+3. Run `chat_codex_session.py` if inspection shows accumulated bulk or poor
    context recovery.
 
 Sources:
