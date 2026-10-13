@@ -65,6 +65,8 @@ Earlier chat-only outputs can contain legitimate archival dialogue whose parent
 chains are disconnected. A root or unreachable row is not, by itself, evidence
 of an abandoned rewind. Following compact `logicalParentUuid` fixes native
 boundaries but does not establish preservation of every imported archival root.
+Normal chat cleanup now refuses to discard detached imported compact summaries;
+use conservative compaction for these histories until archival selection is supported.
 
 The branch filter introduced in `5367e53` followed only physical parents. It
 could discard earlier conversation while retaining the latest compact summary,

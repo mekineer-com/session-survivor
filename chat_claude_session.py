@@ -271,6 +271,10 @@ def active_branch_records(records: list[dict[str, Any]], state: dict[str, int]) 
                 raise ValueError("Claude compact boundary has an unresolved logical parent.")
         row = by_uuid.get(parent)
 
+    if any(row.get("isCompactSummary") and "parentUuid" not in row
+           and not row.get("isSidechain") and row.get("uuid") not in active for row in records):
+        raise ValueError("Active-branch selection would discard imported archival summaries; use conservative compaction.")
+
     selected = [row for row in records if not row.get("uuid") or row.get("uuid") in active]
     state["dropped_inactive_branch_records"] = len(records) - len(selected)
     return selected

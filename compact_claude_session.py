@@ -280,6 +280,10 @@ def validate_claude_records(records: list[dict[str, Any]]) -> None:
         metadata = row.get("compactMetadata") or {}
         segment = metadata.get("preservedSegment") or {}
         preserved = metadata.get("preservedMessages") or {}
+        advisory = preserved.get("allUuids")
+        if advisory is not None and (not isinstance(advisory, list)
+                                     or any(not isinstance(ref, str) or not ref for ref in advisory)):
+            raise ValueError("Claude compact advisory allUuids must be a list of nonempty strings.")
         references = [row.get("logicalParentUuid"), preserved.get("anchorUuid")]
         references.extend(segment.get(key) for key in ("headUuid", "anchorUuid", "tailUuid"))
         references.extend(preserved.get("uuids", []))
