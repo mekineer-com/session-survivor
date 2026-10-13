@@ -274,6 +274,18 @@ def validate_claude_records(records: list[dict[str, Any]]) -> None:
     if missing_parents:
         raise ValueError(f"Claude output has unresolved parent UUIDs: {len(missing_parents)}")
     by_uuid = {row["uuid"]: row for row in records if isinstance(row.get("uuid"), str) and row["uuid"]}
+    for row in records:
+        if row.get("type") != "system" or row.get("subtype") != "compact_boundary":
+            continue
+        metadata = row.get("compactMetadata") or {}
+        segment = metadata.get("preservedSegment") or {}
+        preserved = metadata.get("preservedMessages") or {}
+        references = [row.get("logicalParentUuid"), preserved.get("anchorUuid")]
+        references.extend(segment.get(key) for key in ("headUuid", "anchorUuid", "tailUuid"))
+        references.extend(preserved.get("uuids", []))
+        references.extend(preserved.get("allUuids", []))
+        if any(ref is not None and (not isinstance(ref, str) or ref not in uuids) for ref in references):
+            raise ValueError("Claude output has unresolved compact UUID references; retain a larger native tail.")
     checked: set[str] = set()
     for start in by_uuid:
         if start in checked:
@@ -284,7 +296,10 @@ def validate_claude_records(records: list[dict[str, Any]]) -> None:
             if current in seen:
                 raise ValueError("Claude output has a parent cycle.")
             seen.add(current)
-            parent = by_uuid[current].get("parentUuid")
+            row = by_uuid[current]
+            parent = row.get("parentUuid")
+            if parent is None and row.get("type") == "system" and row.get("subtype") == "compact_boundary":
+                parent = row.get("logicalParentUuid")
             current = parent if isinstance(parent, str) and parent else None
         checked.update(seen)
     for row_uuid, tool_id in tool_results:

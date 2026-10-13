@@ -52,6 +52,26 @@ class ClaudeSessionTest(unittest.TestCase):
         selected = active_branch_records(records, defaultdict(int))
         self.assertEqual([item["uuid"] for item in selected],
                          ["u", "a", "boundary", "summary", "next"])
+        records[3]["logicalParentUuid"] = "missing"
+        with self.assertRaisesRegex(ValueError, "logical parent"):
+            active_branch_records(records, defaultdict(int))
+        records[3]["logicalParentUuid"] = "summary"
+        with self.assertRaisesRegex(ValueError, "cycle"):
+            active_branch_records(records, defaultdict(int))
+        with self.assertRaisesRegex(ValueError, "cycle"):
+            validate_claude_records(records)
+
+    def test_retained_compact_references_must_resolve(self):
+        records = [row("user", "u", None, "question"),
+                   row("assistant", "a", "u", "answer"),
+                   {"type": "system", "subtype": "compact_boundary", "uuid": "boundary",
+                    "parentUuid": None, "logicalParentUuid": "a",
+                    "compactMetadata": {"preservedMessages": {"allUuids": ["a"]}}},
+                   row("user", "summary", "boundary", "continuity", isCompactSummary=True)]
+        validate_claude_records(records)
+        records[2]["compactMetadata"]["preservedMessages"]["allUuids"] = ["discarded-tool"]
+        with self.assertRaisesRegex(ValueError, "compact UUID references"):
+            validate_claude_records(records)
 
     def test_summary_dialogue_and_model_identity_are_preserved(self):
         summary = "This session is being continued from a previous conversation that ran out of context.\n\nSummary:" + "x" * 5000

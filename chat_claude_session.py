@@ -259,12 +259,16 @@ def active_branch_records(records: list[dict[str, Any]], state: dict[str, int]) 
     row = leaf
     while isinstance(row, dict):
         row_uuid = row.get("uuid")
-        if not isinstance(row_uuid, str) or not row_uuid or row_uuid in active:
+        if not isinstance(row_uuid, str) or not row_uuid:
             break
+        if row_uuid in active:
+            raise ValueError("Claude active-branch ancestry has a cycle.")
         active.add(row_uuid)
         parent = row.get("parentUuid")
         if parent is None and row.get("type") == "system" and row.get("subtype") == "compact_boundary":
             parent = row.get("logicalParentUuid")
+            if parent is not None and (not isinstance(parent, str) or parent not in by_uuid):
+                raise ValueError("Claude compact boundary has an unresolved logical parent.")
         row = by_uuid.get(parent)
 
     selected = [row for row in records if not row.get("uuid") or row.get("uuid") in active]
