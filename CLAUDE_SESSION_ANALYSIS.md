@@ -50,6 +50,17 @@ ancestry. See [README's Claude profile](README.md#claude) for chat-only maintena
 
 ## Imported History And Cleanup Loss
 
+Installed 2.1.280 reader inspection confirmed that native resume selects a leaf
+and prunes/relinks around the latest compact boundary. Restoring archival text
+on disk does not automatically load it all into model context. Verify those two
+outcomes separately; do not remove current compact state just to force old text in.
+
+`compactMetadata.preservedMessages.uuids` is the replay list and must resolve,
+along with anchors and segment endpoints. `allUuids` also carries auxiliary
+records: the native replay lookup filters missing entries. Historical sources
+can therefore legitimately retain absent advisory IDs; do not delete metadata
+or reject a transcript solely because an `allUuids` entry is missing.
+
 Earlier chat-only outputs can contain legitimate archival dialogue whose parent
 chains are disconnected. A root or unreachable row is not, by itself, evidence
 of an abandoned rewind. Following compact `logicalParentUuid` fixes native

@@ -66,10 +66,11 @@ class ClaudeSessionTest(unittest.TestCase):
                    row("assistant", "a", "u", "answer"),
                    {"type": "system", "subtype": "compact_boundary", "uuid": "boundary",
                     "parentUuid": None, "logicalParentUuid": "a",
-                    "compactMetadata": {"preservedMessages": {"allUuids": ["a"]}}},
+                    "compactMetadata": {"preservedMessages": {
+                        "uuids": ["a"], "allUuids": ["a", "missing-advisory"]}}},
                    row("user", "summary", "boundary", "continuity", isCompactSummary=True)]
         validate_claude_records(records)
-        records[2]["compactMetadata"]["preservedMessages"]["allUuids"] = ["discarded-tool"]
+        records[2]["compactMetadata"]["preservedMessages"]["uuids"] = ["discarded-tool"]
         with self.assertRaisesRegex(ValueError, "compact UUID references"):
             validate_claude_records(records)
 

@@ -283,7 +283,7 @@ def validate_claude_records(records: list[dict[str, Any]]) -> None:
         references = [row.get("logicalParentUuid"), preserved.get("anchorUuid")]
         references.extend(segment.get(key) for key in ("headUuid", "anchorUuid", "tailUuid"))
         references.extend(preserved.get("uuids", []))
-        references.extend(preserved.get("allUuids", []))
+        # Native replay filters missing advisory allUuids; uuids/anchors must resolve.
         if any(ref is not None and (not isinstance(ref, str) or ref not in uuids) for ref in references):
             raise ValueError("Claude output has unresolved compact UUID references; retain a larger native tail.")
     checked: set[str] = set()
