@@ -33,6 +33,10 @@ Anthropic documents the [background-state locations](https://code.claude.com/doc
   2.1.195 resume path; existing compactors backfill from observed model metadata.
 - Preserve compact-summary flags such as `isCompactSummary`; a continuation
   summary is not a new message authored by the user.
+- Native `system/compact_boundary` may reset `parentUuid` to null while
+  `logicalParentUuid` links earlier history. Follow that link during active-branch
+  selection; compaction is not a rewind. Keep native preserved-message references
+  resolvable in the retained tail.
 - Keep complete thinking blocks in full-fidelity recovery. If the chosen
   compaction profile removes them, remove whole blocks, never blank signatures.
 - `custom-title` stores `customTitle` and usually `sessionId`. Keeping dialogue

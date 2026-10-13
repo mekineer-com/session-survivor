@@ -41,6 +41,18 @@ class ClaudeSessionTest(unittest.TestCase):
         selected = active_branch_records([*records, sidechain], defaultdict(int))
         self.assertEqual([item["uuid"] for item in selected], ["u", "active"])
 
+    def test_compact_boundary_preserves_logical_history_not_abandoned_branch(self):
+        records = [row("user", "u", None, "question"),
+                   row("assistant", "a", "u", "answer"),
+                   row("assistant", "abandoned", "u", "wrong branch"),
+                   {"type": "system", "subtype": "compact_boundary", "uuid": "boundary",
+                    "parentUuid": None, "logicalParentUuid": "a"},
+                   row("user", "summary", "boundary", "continuity", isCompactSummary=True),
+                   row("user", "next", "summary", "continue")]
+        selected = active_branch_records(records, defaultdict(int))
+        self.assertEqual([item["uuid"] for item in selected],
+                         ["u", "a", "boundary", "summary", "next"])
+
     def test_summary_dialogue_and_model_identity_are_preserved(self):
         summary = "This session is being continued from a previous conversation that ran out of context.\n\nSummary:" + "x" * 5000
         records = [row("assistant", "a", None, "prior", message_extra={"model": "claude-opus-4-6"}),

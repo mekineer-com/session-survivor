@@ -262,7 +262,10 @@ def active_branch_records(records: list[dict[str, Any]], state: dict[str, int]) 
         if not isinstance(row_uuid, str) or not row_uuid or row_uuid in active:
             break
         active.add(row_uuid)
-        row = by_uuid.get(row.get("parentUuid"))
+        parent = row.get("parentUuid")
+        if parent is None and row.get("type") == "system" and row.get("subtype") == "compact_boundary":
+            parent = row.get("logicalParentUuid")
+        row = by_uuid.get(parent)
 
     selected = [row for row in records if not row.get("uuid") or row.get("uuid") in active]
     state["dropped_inactive_branch_records"] = len(records) - len(selected)
