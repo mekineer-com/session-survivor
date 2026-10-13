@@ -65,9 +65,12 @@ Earlier chat-only outputs can contain legitimate archival dialogue whose parent
 chains are disconnected. A root or unreachable row is not, by itself, evidence
 of an abandoned rewind. Following compact `logicalParentUuid` fixes native
 boundaries but does not establish preservation of every imported archival root.
-Normal chat cleanup now refuses to discard detached main conversational roots,
-including ordinary archived dialogue and the script's own earlier chat outputs;
-use conservative compaction for these histories until archival selection is supported.
+Normal chat cleanup now selects the continuation separately within each disconnected
+conversation segment. It retains ordinary archived dialogue and earlier chat outputs
+without connecting their roots to the current segment or flattening sibling rewinds.
+Chat parent tracking and native-tail anchoring are segment-local; only the current
+segment contributes native-tail turns. Interleaved archive rows are handled as old
+chat consistently, with transformed rows merged back in original physical order.
 Both absent and explicit-null parents represent roots. If advisory `allUuids`
 is present, require a list of nonempty strings, without requiring node membership.
 
@@ -105,8 +108,10 @@ assistant-side results is a separate question.
 October 13 hunk repairs retain post-leaf native supporting records, reject malformed
 dialogue/tool/replay identity, protect path/ID strings during result-body trimming,
 and refuse existing publication destinations so earlier originals are not overwritten.
-Detached archive refusal prevents further loss; it does not restore aggressive
-repeat cleanup for those files. Tool relationships across native preserved-message
+The initial detached-archive refusal prevented loss but did not finish repeat cleanup.
+The subsequent segment-local repair succeeds repeatedly with unchanged output in
+fictional archive/summary/interleaving fixtures, including title and identity metadata.
+Tool relationships across native preserved-message
 replay still require effective-graph handling, not blanket logical-parent permission.
 
 ## Forks and Redirects

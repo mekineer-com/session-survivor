@@ -232,6 +232,34 @@ def is_user_turn_start(obj: dict[str, Any]) -> bool:
     return bool(text and not is_meta_noise(text) and not is_continuation_summary(text))
 
 
+def conversation_roots(records: list[dict[str, Any]]) -> dict[str, str]:
+    # Native compact links join history; imported parentless summaries stay separate.
+    by_uuid = {row["uuid"]: row for row in records if row.get("uuid")}
+    roots: dict[str, str] = {}
+    for start in by_uuid:
+        current = start
+        path: set[str] = set()
+        while current not in roots:
+            if current in path:
+                raise ValueError("Claude conversation ancestry has a cycle.")
+            path.add(current)
+            row = by_uuid[current]
+            parent = row.get("parentUuid")
+            compact = row.get("type") == "system" and row.get("subtype") == "compact_boundary"
+            if parent is None and compact:
+                parent = row.get("logicalParentUuid")
+            if parent is None:
+                roots[current] = current
+                break
+            if not isinstance(parent, str) or parent not in by_uuid:
+                raise ValueError("Claude conversation has an unresolved logical parent." if compact
+                                 else "Claude conversation has an unresolved parent UUID.")
+            current = parent
+        root = roots[current]
+        roots.update((uid, root) for uid in path)
+    return roots
+
+
 def active_branch_records(records: list[dict[str, Any]], state: dict[str, int]) -> list[dict[str, Any]]:
     by_uuid: dict[str, dict[str, Any]] = {}
     for row in records:
@@ -242,54 +270,24 @@ def active_branch_records(records: list[dict[str, Any]], state: dict[str, int]) 
             raise ValueError(f"Duplicate Claude UUID: {row_uuid}")
         by_uuid[row_uuid] = row
 
-    leaf = next(
-        (
-            row for row in reversed(records)
-            if row.get("uuid") in by_uuid
-            and row.get("type") in ("user", "assistant")
-            and not row.get("isSidechain")
-        ),
-        None,
-    )
+    roots = conversation_roots(records)
+    leaves: dict[str, dict[str, Any]] = {}
+    for row in reversed(records):
+        if row.get("uuid") in by_uuid and row.get("type") in ("user", "assistant") and not row.get("isSidechain"):
+            leaves.setdefault(roots[row["uuid"]], row)
+    leaf = next(iter(leaves.values()), None)
     if leaf is None:
         if by_uuid:
             raise ValueError("Claude session has no main-conversation branch.")
         return records
     active: set[str] = set()
-    row = leaf
-    while isinstance(row, dict):
-        row_uuid = row.get("uuid")
-        if not isinstance(row_uuid, str) or not row_uuid:
-            break
-        if row_uuid in active:
-            raise ValueError("Claude active-branch ancestry has a cycle.")
-        active.add(row_uuid)
-        parent = row.get("parentUuid")
-        if parent is None and row.get("type") == "system" and row.get("subtype") == "compact_boundary":
-            parent = row.get("logicalParentUuid")
-            if parent is not None and (not isinstance(parent, str) or parent not in by_uuid):
-                raise ValueError("Claude compact boundary has an unresolved logical parent.")
-        row = by_uuid.get(parent)
-
-    for candidate in records:
-        if candidate.get("type") not in ("user", "assistant") or candidate.get("isSidechain"):
-            continue
-        if not candidate.get("uuid") or candidate.get("uuid") in active:
-            continue
-        seen: set[str] = set()
-        row = candidate
-        # ponytail: walk excluded ancestry; cache roots if branching makes this costly.
-        while row is not None and row.get("uuid") not in active:
-            row_uuid = row.get("uuid")
-            if row_uuid in seen:
-                raise ValueError("Claude excluded-branch ancestry has a cycle.")
-            seen.add(row_uuid)
+    for row in leaves.values():
+        while row is not None and row["uuid"] not in active:
+            active.add(row["uuid"])
             parent = row.get("parentUuid")
             if parent is None and row.get("type") == "system" and row.get("subtype") == "compact_boundary":
                 parent = row.get("logicalParentUuid")
             row = by_uuid.get(parent)
-        if row is None:
-            raise ValueError("Active-branch selection would discard detached main conversation history; use conservative compaction.")
 
     children: dict[str, list[str]] = {}
     for row in records:
@@ -327,14 +325,6 @@ def safe_tail_start_index(records: list[dict[str, Any]], tail_turns: int) -> int
             if found == tail_turns:
                 return idx
     return 0
-
-
-def last_uuid(records: list[dict[str, Any]]) -> str | None:
-    for row in reversed(records):
-        value = row.get("uuid")
-        if isinstance(value, str) and value:
-            return value
-    return None
 
 
 def compact_native_tail_records(
@@ -399,7 +389,8 @@ def compact_chat_records(
         compacted.append(kept_title)
         state["kept_custom_title"] += 1
 
-    last_kept_uuid: str | None = None
+    roots = conversation_roots(session_records)
+    last_kept_uuids: dict[str, str] = {}
 
     for line_no, obj in enumerate(records, 1):
         item_type = obj.get("type")
@@ -446,6 +437,7 @@ def compact_chat_records(
         if not isinstance(message_uuid, str) or not message_uuid:
             message_uuid = stable_uuid(source, line_no)
             state["synthetic_uuid_assigned"] += 1
+        root = roots.get(message_uuid, message_uuid)
 
         if isinstance(raw_content, list):
             resume_content: Any = [{"type": "text", "text": text}]
@@ -472,12 +464,12 @@ def compact_chat_records(
         # Keep compact-summary rows as hard resume anchors: no parent chain.
         if compact_summary:
             row.pop("parentUuid", None)
-        # Rewrite normal chat parentUuid to previous kept record, not removed intermediates.
-        elif last_kept_uuid is not None:
-            row["parentUuid"] = last_kept_uuid
+        # Reconnect within this segment, never across an archived root.
+        elif root in last_kept_uuids:
+            row["parentUuid"] = last_kept_uuids[root]
         else:
             row.pop("parentUuid", None)
-        last_kept_uuid = message_uuid
+        last_kept_uuids[root] = message_uuid
 
         compacted.append(row)
         state["kept_chat_records"] += 1
@@ -535,18 +527,37 @@ def main() -> int:
         "assistant_models_backfilled": 0,
     }
     records = active_branch_records(records, state)
-    tail_start = safe_tail_start_index(records, args.safe_tail_turns)
+    roots = conversation_roots(records)
+    leaf = next(row for row in reversed(records) if row.get("type") in ("user", "assistant") and not row.get("isSidechain"))
+    current_root = roots[leaf["uuid"]]
+    current_records = [row for row in records if roots.get(row.get("uuid")) == current_root]
+    current_tail_start = safe_tail_start_index(current_records, args.safe_tail_turns)
+    tail_start = (next(idx for idx, row in enumerate(records) if row is current_records[current_tail_start])
+                  if current_tail_start < len(current_records)
+                  else next(idx for idx, row in enumerate(records) if row is leaf) + 1)
     if state.pop("_post_leaf_start_index", len(records)) < tail_start:
         raise ValueError("Native post-leaf support precedes the requested tail; use a larger native tail or conservative compaction.")
-    old_records = records[:tail_start]
-    tail_records = records[tail_start:]
-    state["kept_safe_tail_turns"] = min(args.safe_tail_turns, sum(1 for obj in records if is_user_turn_start(obj)))
+    old_records = [row for idx, row in enumerate(records)
+                   if idx < tail_start or (row.get("uuid") and roots[row["uuid"]] != current_root)]
+    tail_records = [row for row in records[tail_start:]
+                    if not row.get("uuid") or roots[row["uuid"]] == current_root]
+    state["kept_safe_tail_turns"] = min(args.safe_tail_turns, sum(1 for obj in current_records if is_user_turn_start(obj)))
 
-    compacted = compact_chat_records(old_records, records, source, args, state)
-    tail_parent_uuid = last_uuid(compacted)
+    chat_rows = compact_chat_records(old_records, records, source, args, state)
+    tail_root = roots.get(next((row["uuid"] for row in tail_records if row.get("uuid")), None))
+    tail_parent_uuid = next((row["uuid"] for row in reversed(chat_rows)
+                             if row.get("uuid") and roots.get(row["uuid"]) == tail_root), None)
     safe_tail = compact_native_tail_records(tail_records, tail_parent_uuid, args, state)
     state["kept_safe_tail_records"] = len(safe_tail)
-    compacted.extend(safe_tail)
+    chat_by_uuid = {row["uuid"]: row for row in chat_rows if row.get("uuid")}
+    native_by_source = {id(source_row): row for source_row, row in zip(
+        (row for row in tail_records if row.get("type") != "custom-title"), safe_tail)}
+    compacted = [row for row in chat_rows if not row.get("uuid")]
+    # Keep physical order even when archived dialogue is interleaved with the native tail.
+    for source_row in records:
+        row = native_by_source.get(id(source_row), chat_by_uuid.get(source_row.get("uuid")))
+        if row is not None:
+            compacted.append(row)
     state["assistant_models_backfilled"] = backfill_assistant_models(compacted, records)
     validate_claude_records(compacted)
     warnings: list[str] = []

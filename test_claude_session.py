@@ -66,11 +66,9 @@ class ClaudeSessionTest(unittest.TestCase):
         archive.pop("parentUuid")
         records = [archive, row("assistant", "old", "archive", "older reply"),
                    row("user", "current", None, "current conversation")]
-        with self.assertRaisesRegex(ValueError, "detached main conversation history"):
-            active_branch_records(records, defaultdict(int))
+        self.assertEqual(active_branch_records(records, defaultdict(int)), records)
         archive["parentUuid"] = None
-        with self.assertRaisesRegex(ValueError, "detached main conversation history"):
-            active_branch_records(records, defaultdict(int))
+        self.assertEqual(active_branch_records(records, defaultdict(int)), records)
 
     def test_retained_compact_references_must_resolve(self):
         records = [row("user", "u", None, "question"),

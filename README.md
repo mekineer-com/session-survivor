@@ -418,13 +418,12 @@ Claude chat-resume mode (`chat_claude_session.py`):
   - old-history attachments, queue/status lineage, most permission/status records, file-history snapshots, non-text tool payloads
   - command/meta wrapper chatter (`<local-command-caveat>`, `<command-name>`, task notifications)
 - guardrails:
-  - selects the active Claude parent chain instead of flattening abandoned branches into chat
-  - refuses to discard detached main conversation history, including earlier chat outputs; use conservative compaction
-    for these archives (see [format/recovery reference](CLAUDE_SESSION_ANALYSIS.md#imported-history-and-cleanup-loss))
+  - selects the continuation within each disconnected conversation segment, retaining archives without joining their parent chains or flattening sibling rewind alternatives
+  - counts native-tail turns only in the current segment and preserves source order across interleaved archives
   - preserves native compact summaries and recent dialogue verbatim
   - refuses duplicate UUIDs, broken parent/tool links, empty dialogue, source/output collisions, and changed sources
   - builds artifacts privately and publishes the manifest last
-  - idempotent truncation (re-running chat-resume does not keep shortening already-compacted placeholders)
+  - repeat cleanup with unchanged settings retains earlier cleaned dialogue/summaries and separate segment roots; existing truncation placeholders are not shortened again
 - why `uuid` (not `parentUuid`):
   - controlled `claude -r <session_id> --fork-session -p` tests passed with `type+message+timestamp+uuid`
   - controlled tests also passed with `parentUuid`, but `uuid` is self-contained and does not depend on parent links to dropped records
