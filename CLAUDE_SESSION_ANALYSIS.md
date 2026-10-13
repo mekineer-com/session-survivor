@@ -1,6 +1,6 @@
 # Claude Code Session Format and Recovery
 
-Verified 2026-10-01 against Claude Code 2.1.280, the installed loader, and a
+Verified through 2026-10-12 against Claude Code 2.1.280, the installed loader, and a
 closed-session fork restoration. This is a format/recovery reference, not a
 generic merger or a guarantee that later versions keep the same contract.
 
@@ -67,6 +67,8 @@ of an abandoned rewind. Following compact `logicalParentUuid` fixes native
 boundaries but does not establish preservation of every imported archival root.
 Normal chat cleanup now refuses to discard detached imported compact summaries;
 use conservative compaction for these histories until archival selection is supported.
+Both absent and explicit-null parents represent roots. If advisory `allUuids`
+is present, require a list of nonempty strings, without requiring node membership.
 
 The branch filter introduced in `5367e53` followed only physical parents. It
 could discard earlier conversation while retaining the latest compact summary,
@@ -81,6 +83,13 @@ archival roots from actual rewinds before selecting history. Keep recent native
 compact references resolvable. Do not deduplicate by text or blindly concatenate
 backups; changing envelopes or repeated UUIDs can require deliberate reconciliation.
 Private incident details and recovery inventories stay outside public documentation.
+
+Recovery verified on October 12 restored the archival transcript while retaining
+the exact current native window and only current operational metadata. Historical
+queue/bridge state was excluded; original UUIDs, parents, timestamps, dialogue and
+summary flags stayed unchanged. Offline execution of extracted reader functions
+confirmed identical resumed records; this does not certify full native/UI loading.
+Create private recovery outputs as `0600` from the outset, not after writing.
 
 ## Forks and Redirects
 

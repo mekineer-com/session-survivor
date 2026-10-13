@@ -68,6 +68,9 @@ class ClaudeSessionTest(unittest.TestCase):
                    row("user", "current", None, "current conversation")]
         with self.assertRaisesRegex(ValueError, "imported archival summaries"):
             active_branch_records(records, defaultdict(int))
+        archive["parentUuid"] = None
+        with self.assertRaisesRegex(ValueError, "imported archival summaries"):
+            active_branch_records(records, defaultdict(int))
 
     def test_retained_compact_references_must_resolve(self):
         records = [row("user", "u", None, "question"),
@@ -83,9 +86,10 @@ class ClaudeSessionTest(unittest.TestCase):
             validate_claude_records(records)
         preserved = records[2]["compactMetadata"]["preservedMessages"]
         preserved["uuids"] = ["a"]
-        preserved["allUuids"] = "not-an-array"
-        with self.assertRaisesRegex(ValueError, "advisory allUuids"):
-            validate_claude_records(records)
+        for invalid in (None, "not-an-array", [""], [42]):
+            preserved["allUuids"] = invalid
+            with self.assertRaisesRegex(ValueError, "advisory allUuids"):
+                validate_claude_records(records)
 
     def test_summary_dialogue_and_model_identity_are_preserved(self):
         summary = "This session is being continued from a previous conversation that ran out of context.\n\nSummary:" + "x" * 5000

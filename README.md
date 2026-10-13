@@ -419,6 +419,8 @@ Claude chat-resume mode (`chat_claude_session.py`):
   - command/meta wrapper chatter (`<local-command-caveat>`, `<command-name>`, task notifications)
 - guardrails:
   - selects the active Claude parent chain instead of flattening abandoned branches into chat
+  - refuses to discard detached imported compact summaries; use conservative compaction
+    for these archives (see [format/recovery reference](CLAUDE_SESSION_ANALYSIS.md#imported-history-and-cleanup-loss))
   - preserves native compact summaries and recent dialogue verbatim
   - refuses duplicate UUIDs, broken parent/tool links, empty dialogue, source/output collisions, and changed sources
   - builds artifacts privately and publishes the manifest last

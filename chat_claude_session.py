@@ -271,7 +271,7 @@ def active_branch_records(records: list[dict[str, Any]], state: dict[str, int]) 
                 raise ValueError("Claude compact boundary has an unresolved logical parent.")
         row = by_uuid.get(parent)
 
-    if any(row.get("isCompactSummary") and "parentUuid" not in row
+    if any(row.get("isCompactSummary") and row.get("parentUuid") is None
            and not row.get("isSidechain") and row.get("uuid") not in active for row in records):
         raise ValueError("Active-branch selection would discard imported archival summaries; use conservative compaction.")
 
