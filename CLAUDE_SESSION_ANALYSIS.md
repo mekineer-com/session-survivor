@@ -91,6 +91,15 @@ summary flags stayed unchanged. Offline execution of extracted reader functions
 confirmed identical resumed records; this does not certify full native/UI loading.
 Create private recovery outputs as `0600` from the outset, not after writing.
 
+Tool validation added in `5367e53` (September 14) indexed only `tool_use`.
+Later ordering/ancestry checks retained that omission; tests covered client tools
+but not server tools. A September 20 GLM record from Claude Code 2.1.233 contains
+`server_tool_use` followed by a matching ancestor-linked `tool_result`, which the
+validator falsely rejects. This is incomplete format coverage, not proof of lost
+history or a newly introduced October format. Preserve the stored blocks/parents;
+recognize the server invocation without relaxing ID/ancestry checks. Native wire
+acceptance of provider-specific assistant-side results is a separate question.
+
 ## Forks and Redirects
 
 Backgrounding can create a new transcript identity rather than simply moving
