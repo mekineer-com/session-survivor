@@ -48,6 +48,27 @@ The existing [`validate_claude_records`](compact_claude_session.py) checks
 duplicate UUIDs, parent resolution/cycles, meaningful dialogue and tool-result
 ancestry. See [README's Claude profile](README.md#claude) for chat-only maintenance.
 
+## Imported History And Cleanup Loss
+
+Earlier chat-only outputs can contain legitimate archival dialogue whose parent
+chains are disconnected. A root or unreachable row is not, by itself, evidence
+of an abandoned rewind. Following compact `logicalParentUuid` fixes native
+boundaries but does not establish preservation of every imported archival root.
+
+The branch filter introduced in `5367e53` followed only physical parents. It
+could discard earlier conversation while retaining the latest compact summary,
+so a successful resume could conceal substantial history loss. Compare retained
+dialogue and summary records, not merely JSON validity or whether the agent replies.
+
+An exact candidate-byte prefix in a later full backup proves that candidate was
+used and identifies an append-only continuation cut point. This is stronger
+than inferred dates or file sizes. For historical recovery, freeze all sources,
+verify such prefix relationships, compare UUID/payload conflicts, and distinguish
+archival roots from actual rewinds before selecting history. Keep recent native
+compact references resolvable. Do not deduplicate by text or blindly concatenate
+backups; changing envelopes or repeated UUIDs can require deliberate reconciliation.
+Private incident details and recovery inventories stay outside public documentation.
+
 ## Forks and Redirects
 
 Backgrounding can create a new transcript identity rather than simply moving
