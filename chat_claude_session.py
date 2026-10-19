@@ -394,7 +394,7 @@ def compact_chat_records(
 
     for line_no, obj in enumerate(records, 1):
         item_type = obj.get("type")
-        if item_type == "custom-title":
+        if item_type in ("custom-title", "agent-setting"):
             continue
         if item_type not in ("user", "assistant"):
             state["dropped_non_chat_type"] += 1
@@ -508,6 +508,7 @@ def main() -> int:
     state = {
         "kept_chat_records": 0,
         "kept_custom_title": 0,
+        "kept_agent_settings": 0,
         "dropped_non_chat_type": 0,
         "dropped_non_text": 0,
         "dropped_meta_noise": 0,
@@ -555,6 +556,10 @@ def main() -> int:
     compacted = [row for row in chat_rows if not row.get("uuid")]
     # Keep physical order even when archived dialogue is interleaved with the native tail.
     for source_row in records:
+        if source_row.get("type") == "agent-setting":
+            compacted.append(source_row)
+            state["kept_agent_settings"] += 1
+            continue
         row = native_by_source.get(id(source_row), chat_by_uuid.get(source_row.get("uuid")))
         if row is not None:
             compacted.append(row)

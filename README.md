@@ -406,6 +406,7 @@ Claude chat-resume mode (`chat_claude_session.py`):
   - keep the newest native safe tail when the current turn needs more than chat-only context
 - kept records:
   - latest `custom-title` record (`type=custom-title`, `customTitle`, optional `sessionId`)
+  - native `agent-setting` records, unchanged and in source order, so named-agent selection survives cleanup
   - top-level `type in {user, assistant}`
   - `message.role`
   - merged text content from string content or `message.content[*].type=text`

@@ -1,6 +1,6 @@
 # Claude Code Session Format and Recovery
 
-Verified through 2026-10-13 against Claude Code 2.1.280, the installed loader, and a
+Verified through 2026-10-19 against Claude Code 2.1.280, the installed loader, and a
 closed-session fork restoration. This is a format/recovery reference, not a
 generic merger or a guarantee that later versions keep the same contract.
 
@@ -41,12 +41,58 @@ Anthropic documents the [background-state locations](https://code.claude.com/doc
   compaction profile removes them, remove whole blocks, never blank signatures.
 - `custom-title` stores `customTitle` and usually `sessionId`. Keeping dialogue
   while losing this record can break name-based resume.
+- `agent-setting` stores `agentSetting` and `sessionId` independently of the
+  dialogue ancestry. Keep these native rows unchanged and in physical order;
+  custom titles do not preserve the selected agent definition.
 - Attachments, system records, tool calls/results, snapshots and metadata
   may be ancestry dependencies. Text-only concatenation is not a native splice.
 
 The existing [`validate_claude_records`](compact_claude_session.py) checks
 duplicate UUIDs, parent resolution/cycles, meaningful dialogue and tool-result
 ancestry. See [README's Claude profile](README.md#claude) for chat-only maintenance.
+
+## Named Main Agents And Memory (2026-10-19)
+
+Installed 2.1.280 accepts a main-session `--agent` whose definition has
+`memory: user`. A fictional localhost Messages API probe confirmed separate
+personal memory under `~/.claude/agent-memory/<agent-name>/MEMORY.md`, alongside
+shared project `CLAUDE.md` and project auto memory. Native resume without
+repeating `--agent` restored the selection. Merely renaming a conversation does
+not create this named-agent configuration.
+
+The chat cleaner previously dropped old `agent-setting` rows as non-dialogue.
+Two native selection records became zero; resume lost the persona and its
+personal memory injection. Preserve every selection at its original physical
+position during final assembly, including settings outside the native safe
+tail. Do not collapse selections, filter empty reset values, or duplicate rows
+already present in the tail. The conservative `compact_claude_session.py`
+already deep-copies these records unchanged and needs no implementation fix.
+
+Regression checks cover settings before, inside and after the safe tail,
+multiple selections and an empty selection, tail sizes 0/1/oversized, truthful
+retention counts and three identical cleanups. After the fix, native resume of
+the cleaned fictional transcript again includes the selected persona, personal
+memory and shared project memory. Actual autonomous memory writes and explicit
+native `/compact` were not tested; no real session was changed. In particular,
+the October17 Opus original and candidate contained no `agent-setting` rows,
+so that cleanup did not lose an agent selection he had never configured.
+
+**Prompt tradeoff:** a named agent replaces stock coding instructions in this
+version, even with an empty persona body when `memory: user` supplies memory
+instructions. `--append-system-prompt` retains stock coding instructions and
+shared auto memory, but does not automatically load a separate personal memory.
+The appended text survived an ordinary native resume in the probe, with native
+`attachment/prompt_snapshot` records present; this does not certify survival
+through chat cleanup or justify retaining bulky prompt snapshots. A stable
+launcher-supplied identity/memory instruction remains a configuration option to
+evaluate, not an implemented migration. Do not copy a frozen stock prompt into
+an agent definition as a substitute for the evolving native instructions.
+
+The runnable probe and configuration findings are documented in
+`~/gemini-cli/_research/claude-main-agent-memory.md`. All probe data is fictional,
+with isolated homes and a localhost API; no real auth or model quota was used.
+Official configuration reference:
+[persistent agent memory](https://code.claude.com/docs/en/sub-agents#enable-persistent-memory).
 
 ## Imported History And Cleanup Loss
 

@@ -45,6 +45,28 @@ def candidate(records, turns=1):
 
 
 class ChatPreservationTest(unittest.TestCase):
+    def test_agent_settings_survive_in_order_through_repeated_cleanup(self):
+        def setting(name):
+            return {"type": "agent-setting", "agentSetting": name, "sessionId": "fictional"}
+
+        records = [setting("fictional-alpha"), row("user", "old", None),
+                   row("assistant", "old-reply", "old"), setting("fictional-beta"),
+                   row("user", "current", "old-reply"), setting("fictional-gamma"),
+                   row("assistant", "reply", "current"), setting("")]
+        for turns in (0, 1, 5):
+            with self.subTest(turns=turns):
+                once, report = candidate(records, turns)
+                self.assertEqual([r.get("agentSetting", r.get("uuid")) for r in once],
+                                 [r.get("agentSetting", r.get("uuid")) for r in records])
+                self.assertEqual([r for r in once if r.get("type") == "agent-setting"],
+                                 [r for r in records if r.get("type") == "agent-setting"])
+                self.assertEqual(report["changes"]["kept_agent_settings"], 4)
+                self.assertEqual(report["changes"]["dropped_non_chat_type"], 0)
+                twice, _ = candidate(once, turns)
+                third, _ = candidate(twice, turns)
+                self.assertEqual(twice, once)
+                self.assertEqual(third, once)
+
     def test_detached_dialogue_roots_survive_but_same_root_rewinds_select(self):
         records = [row("user", "archive", None), row("assistant", "archived-reply", "archive"),
                    row("user", "current", None), row("assistant", "abandoned", "current"),

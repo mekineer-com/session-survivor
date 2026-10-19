@@ -12,6 +12,14 @@ def row(kind, uuid, parent, content):
 
 
 class ClaudeSafePreservationTest(unittest.TestCase):
+    def test_agent_settings_are_preserved_unchanged(self):
+        for selection in ("fictional-alpha", "fictional-beta", ""):
+            record = {"type": "agent-setting", "agentSetting": selection,
+                      "sessionId": "fictional"}
+            output = compact_record(record, SimpleNamespace(), defaultdict(int))
+            self.assertEqual(output, record)
+            self.assertIsNot(output, record)
+
     def test_invocation_families_require_ids_and_ancestry(self):
         for family in ("tool_use", "server_tool_use", "mcp_tool_use"):
             records = [row("user", "u", None, "fictional question"),
