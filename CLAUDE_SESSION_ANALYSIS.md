@@ -88,6 +88,14 @@ launcher-supplied identity/memory instruction remains a configuration option to
 evaluate, not an implemented migration. Do not copy a frozen stock prompt into
 an agent definition as a substitute for the evolving native instructions.
 
+**Existing-session append trap:** a native fictional follow-up found that
+adding a new `--append-system-prompt` while resuming a session with an older
+prompt snapshot can leave the addition absent from the actual model request.
+Passing `--system-prompt-snapshot off` on that resume applied the new addition
+while preserving stock coding instructions and shared memory. Test changing
+instructions on an existing session, not just resuming one created with them.
+This is launch configuration, not a reason to edit history or keep bulky snapshots.
+
 The runnable probe and configuration findings are documented in
 `~/gemini-cli/_research/claude-main-agent-memory.md`. All probe data is fictional,
 with isolated homes and a localhost API; no real auth or model quota was used.
