@@ -207,3 +207,17 @@ state) remains unresolved. A client recovery hunk or per-invocation workaround
 needs that evidence and review; no global transport/model change is justified
 by these controls. Do not blank encrypted reasoning or strip history as a fix
 for a server-held response replay error.
+
+### Storage Wording And Cache Lifetime
+
+The inspected client explicitly sets `store: false` in its Responses request.
+Calling the failed state a "stored response" must not imply a durable archive.
+OpenAI's [WebSocket documentation](https://developers.openai.com/api/docs/guides/websocket-mode)
+describes connection-local in-memory continuation state compatible with
+`store=false`: it disappears on disconnection, and public API connections last
+up to60minutes. Cache entries can also be evicted earlier. This documents the
+public API, not an independently verified lifetime for Codex's internal
+`chatgpt.com/backend-api/codex` route, nor general service-log retention.
+The purpose is faster tool loops; a failed continuation needs recovery, not
+destructive local-history cleanup. The server error's word "persisted" alone
+does not establish disk storage or a30-day response-retention period here.
