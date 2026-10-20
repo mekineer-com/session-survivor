@@ -841,14 +841,6 @@ def compact_response_item(payload: dict, args: argparse.Namespace, state: dict[s
 
 def compact_event_msg(payload: dict, args: argparse.Namespace, state: dict[str, int]) -> None:
     if payload.get("type") == "token_count":
-        info = payload.get("info")
-        if isinstance(info, dict):
-            total = info.get("total_token_usage")
-            model_context_window = info.get("model_context_window")
-            payload["info"] = {
-                "total_token_usage": total,
-                "model_context_window": model_context_window,
-            }
         payload.pop("rate_limits", None)
     if payload.get("type") == "agent_reasoning":
         text = payload.get("text")

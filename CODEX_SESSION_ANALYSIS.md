@@ -263,6 +263,54 @@ describes appearing idle while still working. It closed after reported fixes
 10700/10701; a later commenter reported recurrence on0.133.0. That does not
 establish the cause of Marcos's current UI observation.
 
+### Normal-Settings And Pre-Failure History Controls
+
+Follow-up controls copied the normal global configuration, plugin caches,
+skills and empty hooks into disposable homes. Project-local settings still
+applied. Model/effort remained gpt-6.1-sol/xhigh, web disabled and read-only;
+mem-lite used a separate empty disposable data directory rather than shared
+memories. These were closer controls, not an exact reconstruction of the old
+process environment, account routing or audit prompt.
+
+The full current history completed three sequential shell calls and its final
+marker reply. A second copy containing only the first642 unchanged source rows
+(2,108,824 bytes, ending before the first failed turn) completed the same task.
+Connection logs explicitly confirmed WebSocket connections to the internal
+Codex Responses endpoint in both runs. No replay error or fallback was observed.
+The requests' individual continuation IDs were not captured, so connection
+success alone must not be described as verified incremental request contents.
+The original SHA256 above remained unchanged. Both processes finished; their
+disposable homes, credentials and transcripts were removed.
+
+These controls weaken a deterministic missing-history-field explanation but
+do not reproduce the original audit workload or prove an intermittent backend
+cause. No client transport change or real-history repair was made.
+
+### Separate Confirmed Bug: Token Accounting Cleanup
+
+Both follow-up runs logged18 skipped `token_count` events with missing required
+`last_token_usage`. `compact_event_msg()` rebuilt `info` using only cumulative
+usage and context window, omitting that native field. The installed CLI's
+`TokenUsageInfo` requires it; decoding skips the whole event, including its
+otherwise-retained totals. This is accounting metadata loss, not evidence of
+lost conversation messages or the cause of the server replay error.
+
+Provenance: introduced in April1 commit `3ea120f` (low-value token/context data
+trimming); May1 `30d7939` moved the existing behavior into the type handler.
+The fix deletes that eight-line object reconstruction and preserves `info`
+verbatim. Stale `rate_limits` removal remains. No replacement values or history
+rewrites are introduced; already malformed source records remain malformed.
+The shared helper covers safe/resume records and chat's retained native tail.
+
+Independent managed peer `01a15bbc-a275-7440-bfe7-0e90583f0394` confirmed the
+schema/caller effects and reviewed the final code/test diff with no findings;
+source-only review, not an independent test execution. The added regression
+checks exact accounting preservation, future fields, unchanged input and
+rate-limit removal both directly and through generated chat-tail output.
+All71 existing/discovered unit tests passed with the fix. No real session was
+transformed or swapped to apply it. Both controls succeeded despite the warnings,
+so this fix must not be advertised as resolving `unsupported_persisted_item_context`.
+
 ### Storage Wording And Cache Lifetime
 
 The inspected client explicitly sets `store: false` in its Responses request.

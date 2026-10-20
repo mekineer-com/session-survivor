@@ -65,6 +65,38 @@ def run_candidate(args) -> int:
 
 
 class ChatCodexSessionTest(unittest.TestCase):
+    def test_token_accounting_survives_safe_and_chat_tail_cleanup(self) -> None:
+        usage = {
+            "input_tokens": 12, "cached_input_tokens": 4, "output_tokens": 3,
+            "reasoning_output_tokens": 1, "total_tokens": 15,
+        }
+        row = {
+            "type": "event_msg", "timestamp": "1-3",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": usage, "last_token_usage": dict(usage),
+                    "model_context_window": 872000, "future_accounting_field": 7,
+                },
+                "rate_limits": {"stale": True},
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            source, _, args, public_paths = candidate_fixture(Path(directory))
+            compacted = compact_record(row, args, defaultdict(int))
+            self.assertEqual(compacted["payload"]["info"], row["payload"]["info"])
+            self.assertNotIn("rate_limits", compacted["payload"])
+            self.assertIn("rate_limits", row["payload"])
+
+            rows = [json.loads(line) for line in source.read_text().splitlines()]
+            rows.insert(-1, row)
+            source.write_text("".join(json.dumps(item) + "\n" for item in rows))
+            self.assertEqual(run_candidate(args), 0)
+            output = [json.loads(line) for line in public_paths[1].read_text().splitlines()]
+            kept = next(item for item in output if item.get("payload", {}).get("type") == "token_count")
+            self.assertEqual(kept["payload"]["info"], row["payload"]["info"])
+            self.assertNotIn("rate_limits", kept["payload"])
+
     def test_checkpoint_metadata_stays_paired_with_history(self) -> None:
         history = [
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}
