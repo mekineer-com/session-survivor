@@ -199,14 +199,69 @@ HTTP-only merely because that flag was supplied.
 
 ### Next Diagnostic Boundary
 
-Reproduce with native, fictional resumed/compacted history and tool round trips,
-then compare continuation transport and entrypoint under matched conditions.
-Do not copy or edit a real agent's reasoning/checkpoints to manufacture a test.
+Normally reproduce with fictional resumed/compacted history and tool round trips.
+Marcos explicitly authorized isolated copies of Vesper's real history for the
+comparison below; that exception does not authorize testing the original or
+editing reasoning/checkpoints to manufacture a fix.
 The trigger (particular history shape, account/backend routing, or connection
 state) remains unresolved. A client recovery hunk or per-invocation workaround
 needs that evidence and review; no global transport/model change is justified
 by these controls. Do not blank encrypted reasoning or strip history as a fix
 for a server-held response replay error.
+
+### Authorized Real-History Copy Controls
+
+After compact, tested two byte-identical copies of the current Vesper JSONL
+(2,618,856 bytes), each in a separate disposable `CODEX_HOME` and `HOME`.
+Both kept the original UUID, but each fresh `state_5.sqlite` resolved it to its
+own copied rollout path, not the canonical session. Authentication was copied,
+not symlinked; inherited API-key and parent-thread environment variables were
+removed. No original session was resumed or swapped.
+
+Both tests used gpt-6.1-sol/xhigh, read-only, web disabled, one shell `printf`
+and a final marker reply. Default-provider headless resume exited0; the
+HTTP-only provider alias above also exited0. Neither produced the replay error.
+The default run's actual wire transport was not traced; do not label that
+successful run a confirmed WebSocket continuation. These used a minimal config
+with apps/plugins disabled and no configured MCP servers, not the full original
+environment. The HTTP alias also changes provider identity. This is not a
+single-variable reproduction of the earlier failures or proof of an HTTP fix.
+The copied history includes the later successful interactive audit, so it is
+not an exact snapshot from immediately before either failure.
+
+The current source retains the exact October12 Session Survivor candidate as
+its byte-for-byte prefix. That maintenance report records22 removed encrypted
+reasoning fields, but the resulting history still resumes headlessly in these
+controls. A universal claim that headless requires what cleanup removed is
+therefore contradicted; a more specific history/environment interaction is
+not ruled out. Do not restore discarded fields on speculation.
+
+Source tracing narrows the mechanism: `LastResponse` is filled from a newly
+completed server response through an in-memory oneshot; `prepare_websocket_request`
+uses that result and a matching input prefix to construct `previous_response_id`.
+It does not read a response ID out of the restored JSONL. The earlier shell
+output before failure establishes that resume reached the new tool loop.
+It does not establish that old history cannot influence the server's response.
+Exec and TUI both use app-server thread resume; their resume parameter overrides,
+originators, and embedded/daemon choices differ. No headless-only missing-file
+field was identified. Next useful reproduction should distinguish the original
+environment and longer tool loop, not mutate the working history.
+
+Original SHA256 before and after both tests:
+`8c22c136999b2773406632b337eeb4d51cba883d9a8d22ad858ae5d36c5037c5`.
+Both test processes exited. Disposable credentials, copied transcripts and
+databases were removed after recording these conclusions. No runtime fix,
+global setting, executable change or session repair was applied.
+
+Public search found no exact `unsupported_persisted_item_context` match,
+including GitHub issue search within openai/codex. Related
+[encrypted-history issue25290](https://github.com/openai/codex/issues/25290)
+uses a different error (`invalid_encrypted_content`); it is not evidence of
+the same cause. Separately,
+[busy-indicator issue10534](https://github.com/openai/codex/issues/10534)
+describes appearing idle while still working. It closed after reported fixes
+10700/10701; a later commenter reported recurrence on0.133.0. That does not
+establish the cause of Marcos's current UI observation.
 
 ### Storage Wording And Cache Lifetime
 
