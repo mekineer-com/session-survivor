@@ -128,3 +128,82 @@ The October 9 original also matched (1,112 each); our cleanup broke the pairing.
 This is a format-compatibility regression exposed by newer Codex output, not a
 recent rewrite of our pruning code or a missing post-compact message. These dates
 identify commits and preserved evidence, not the exact release first shipping it.
+
+## Headless Resume: Server Response Replay Failure (2026-10-20)
+
+Do not diagnose session-file corruption from
+`unsupported_persisted_item_context` alone. In two observed `codex exec resume`
+attempts, the session loaded and generated replies/tool calls before the server
+returned HTTP400 with parameter `previous_response_id`. The same agent later
+completed the source audit through interactive `codex resume`. The commands were
+syntactically valid. Failed prompts remained in the local history, explaining
+why the agent knew about them despite older visible terminal scrollback.
+
+### What The Matching Client Source Establishes
+
+Inspected the source recorded for the installed0.159.3 recall build, a1e4e8f45e
+(later README-only HEAD756afef069), not the older general reference checkout.
+
+- `codex-rs/core/src/client.rs`: the WebSocket continuation constructs
+  `previous_response_id` from the last server response and sends incremental
+  items. The parameter identifies server-held response state, not a local
+  session UUID or JSONL filename.
+- `codex-rs/codex-api/src/common.rs`: the ordinary full HTTP Responses request
+  has no such continuation field. That suggests a transport-level diagnostic
+  route; it does not prove a workaround for the affected agent.
+- `codex-rs/codex-api/src/endpoint/responses_websocket.rs`,
+  `map_wrapped_websocket_error_event`: the installed client recognizes
+  `previous_response_not_found` and `websocket_connection_limit_reached` as
+  retryable. It does NOT recognize `unsupported_persisted_item_context`; an
+  accompanying400 instead becomes an HTTP transport error. Source inspection
+  therefore identifies a missing recovery case, not a verified compactor bug.
+- Headless exec sets originator `codex_exec`; the interactive TUI initializes
+  an app-server client as `codex-tui` and can use the shared daemon. Backend
+  routing, connection state and account caching are hypotheses to distinguish,
+  not established reasons for the different outcomes.
+
+The installed source also contains upstream request/tool-serialization changes
+after the0.159.3 release tag. A diff against that tag is not automatically a diff
+of our recall work. Trace commit provenance before attributing a transport defect
+to local patches. No executable was rebuilt or changed for this investigation.
+
+### Executed Disposable Controls
+
+Used new ephemeral sessions with fictional probe data, model gpt-6.1-sol, effort
+xhigh and one shell call (`printf`) followed by a final reply. Both default and
+HTTP-only controls exited0 with the expected reply after the tool result.
+These short controls did NOT reproduce the affected resumed conversation.
+They rule out an always-broken headless path, not history-dependent or
+intermittent backend failure. No real agent was resumed, transformed or swapped.
+
+The HTTP control used a process-local custom provider with these overrides:
+
+```toml
+model_provider = "aster-http-probe"
+[model_providers.aster-http-probe]
+name = "OpenAI"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
+```
+
+No configuration file was edited. This provider alias may affect more than
+transport capabilities, so the two successful controls are not a strict
+single-variable comparison or proof that HTTP fixes the real failure.
+
+Important: setting `model_providers.openai.supports_websockets=false` is NOT a
+verified switch in this build. `merge_configured_model_providers()` uses
+`entry(...).or_insert(...)` for existing non-Bedrock providers, so that override
+does not replace the built-in OpenAI entry. Do not report a transport test as
+HTTP-only merely because that flag was supplied.
+
+### Next Diagnostic Boundary
+
+Reproduce with native, fictional resumed/compacted history and tool round trips,
+then compare continuation transport and entrypoint under matched conditions.
+Do not copy or edit a real agent's reasoning/checkpoints to manufacture a test.
+The trigger (particular history shape, account/backend routing, or connection
+state) remains unresolved. A client recovery hunk or per-invocation workaround
+needs that evidence and review; no global transport/model change is justified
+by these controls. Do not blank encrypted reasoning or strip history as a fix
+for a server-held response replay error.
