@@ -311,6 +311,65 @@ All71 existing/discovered unit tests passed with the fix. No real session was
 transformed or swapped to apply it. Both controls succeeded despite the warnings,
 so this fix must not be advertised as resolving `unsupported_persisted_item_context`.
 
+### Accounting Repair Copy Experiment
+
+Marcos requested actual log checks before proposing closures, plus copy-only
+experiments for learning. Retained logs show Ari's ordinary interactive resumes
+at09:10 and09:18 UTC October20 encountering the missing field. These four
+entries are TRACE-level (`codex_rollout::recorder`), NOT visible WARN messages.
+No matching retained ordinary-resume entries were attributed to Aster or Codex.
+Do not infer user-visible warning noise merely from malformed records.
+
+Read-only scans found one malformed `token_count.info` in each current Aster,
+Codex and Ari file, with thousands of newer valid accounting records. All three
+have exact recovery matches: Aster's October13 maintenance original, Ari's
+October12 original, Codex's October17 original. Matching used timestamp/ordinal
+and whole-record equality after applying only the known old info filter and
+rate-limit removal. No inferred counters or dialogue matching was needed.
+No real session was changed or closed for this check.
+
+For an actual loader comparison, used Vesper's641-row October12 cleaned artifact
+and its original backup, not a live rollout. On a copy only, restored18 exact
+`info` objects; all other lines remained byte-identical, including checkpoints
+and conversation text. Retained the intended removal of stale rate limits.
+Each variant used a separate empty Codex home/database, no credentials, an
+offline HTTP provider at127.0.0.1:9, disabled apps/plugins and a scratch workspace.
+Only app-server initialize, thread/resume and thread/read were called: no
+turn/start or model response. Both resumes succeeded; private DB rollout paths
+were checked. Fresh-import missing-field WARN entries fell18->0.
+
+That does NOT mean the repaired import was warning-free. Other ordering warnings
+remained:358 missing-ordinal entries and132 ordinal-gap entries, versus358/150
+before counter restoration. Both thread/read(includeTurns=true) responses
+contained only1 userMessage and4 agentMessage, whereas the source has239 native
+user/assistant message records. This is a separate fresh-import/history-display
+lead, not evidence that dialogue bytes were deleted or model context lost.
+Assess API/pagination semantics and the paginated-history importer before
+proposing any ordinal rewrite or claiming a complete history repair.
+
+Follow-up source review and static comparison confirmed a separate display
+compatibility defect, not ordinary response pagination. Both original and
+candidate declare `history_mode=paginated`. The original has4510 ordinal-bearing
+rows and238 canonical chat `item_completed` events (63UserMessage/175AgentMessage).
+The candidate has641 rows,283 with ordinals, and only5 canonical chat events
+(1UserMessage/4AgentMessage). `compact_chat_records` drops older canonical
+completion events and rebuilds messages/legacy replay events without ordinals.
+The native paginated projector consumes canonical `item_completed` events,
+ignores response items and legacy chat events, and its materializer skips rows
+without ordinals. `thread/read(includeTurns=true)` exhausts turn/item cursors,
+so the five-message result was not just the first page.
+
+Managed peer `01a15bbc-a275-7440-bfe7-0e90583f0394` independently verified these
+source paths, not the runtime experiment. Warning totals are not lost-message
+counts; raw messages and UI items need not correspond one-to-one. No claim of
+deleted dialogue bytes, model-memory loss or server-error causation follows.
+Preserving only ordinals would not restore discarded completion events.
+Investigate a minimal paginated-display preservation fix before broader repair;
+do not bulk-renumber real histories or relabel their history mode speculatively.
+Live counter repair is not required for current operation; exact originals are
+available for a later closed-session repair if desired. Disposable experiment
+data and all local probe processes were removed/stopped after recording results.
+
 ### Storage Wording And Cache Lifetime
 
 The inspected client explicitly sets `store: false` in its Responses request.
