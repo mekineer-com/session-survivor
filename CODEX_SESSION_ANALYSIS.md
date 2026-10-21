@@ -370,6 +370,60 @@ Live counter repair is not required for current operation; exact originals are
 available for a later closed-session repair if desired. Disposable experiment
 data and all local probe processes were removed/stopped after recording results.
 
+### Display Defect Scope Versus Model Input
+
+The display defect above must not be generalized to all cleaned agents.
+Streaming comparisons by managed peer `01a15bd2-41e8-7633-ba9a-973b6f9400d8`
+found zero canonical chat completion events before AND after these cleanups:
+Aster October13, Codex October17, Ari October12. Aster declares legacy history;
+Codex and Ari omit history_mode, which deserializes to Legacy in this source.
+Their current inspected rollouts likewise had no canonical chat completions;
+their item_completed records were Extension events. These pairs do not
+demonstrate the paginated chat-display loss found in Vesper. This is static
+scope evidence, not a native UI test of each real running agent.
+
+For Vesper, stable item IDs identify233 omitted canonical chat events:
+62UserMessage and171AgentMessage. UTC event bounds are September10
+19:08:58.803 through October12 23:39:50.827; oldest retained canonical chat is
+October13 02:11:31.672 (October12 evening in Lima). These are bounds of actual
+omissions, not proof of continuous conversation coverage throughout that span.
+All five retained canonical chat IDs match the original. Message bytes remain
+in response_item records; missing UI representation is not file deletion.
+
+The installed source separates model context from paginated display projection.
+Thread resume uses load_latest_model_context, whose reverse scan decodes raw
+rollout items through the latest complete compaction boundary. Core replay
+installs its replacement_history and replays newer response_item records.
+It does not construct model input from the browser's canonical-item table.
+
+Executed a local-only model-request capture to test this distinction. Two
+isolated copies of Vesper's cleaned artifact differed ONLY by removal of all45
+item_completed events. Their private DBs resolved the ID to their own copied
+rollouts. An unauthenticated loopback Responses stub returned a fixed reply;
+apps/plugins were disabled, proxies denied external access, and no actual model
+service was called. Both produced132 input items, with the first127 exactly
+equal. Differences in the five fresh bootstrap/input messages were only new
+message IDs and the isolated Codex skill-root path. Normalizing ONLY those
+differences made all132 items equal. Both had no top-level instructions field;
+instructions were represented within the input. The initial raw-equality
+assertion failed on this expected invocation noise, not on historical content.
+
+This verifies that removing display completion events did not remove working
+model input in this copied history. It does not certify every other cleanup
+transformation: the profile separately prunes checkpoint user items and trims
+tool state. Static comparison of Vesper's active checkpoint showed60->51
+replacement items, removing nine ordinary user messages under the documented
+50-message retention policy; its other checkpoint fields and encrypted
+compaction item were unchanged. Do not attribute that independent policy to
+the display bug, or claim that full raw lifetime chat was auto-loaded before it.
+
+Provenance remains queued: identify the cleanup commit that discarded canonical
+records/ordinals and the native commit/format transition that made them required
+for paginated display, using the installed source rather than only its version
+label. No claim yet that either our code or an upstream change alone introduced
+the incompatibility. All temporary capture payloads/homes were removed after
+recording conclusions; real agents and histories were left unchanged.
+
 ### Storage Wording And Cache Lifetime
 
 The inspected client explicitly sets `store: false` in its Responses request.
