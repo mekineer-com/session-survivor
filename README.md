@@ -19,11 +19,12 @@ vendor guidance, research evidence, and the local inspection cadence.
 
 This repo is actively used script tooling, not a packaged release.
 
-**Known Codex limitation:** `chat_codex_session.py` currently loses older
-browsable dialogue in newer paginated histories, even though the text remains
-in the file. Avoid this chat cleanup on paginated histories until preservation
-is fixed and validated; a successful resume does not establish display safety.
-See [the analysis](CODEX_SESSION_ANALYSIS.md#accounting-repair-copy-experiment).
+**Codex formats:** `chat_codex_session.py` preserves native conversation display
+in both legacy and paginated histories. Paginated candidates require a
+[per-thread display-index reset after replacement](CODEX_SESSION_SURVIVOR_RUNBOOK.md#paginated-display-index).
+Older damaged files need verified-backup repair; rerunning cleanup cannot invent
+discarded records. Weekly-summary import and advanced semantic `resume` remain
+legacy-only and refuse paginated input rather than silently corrupting its format.
 
 Default operator path:
 
@@ -501,6 +502,15 @@ visible history separately. The
 [required test matrix](CODEX_SESSION_ANALYSIS.md#required-cross-format-validation)
 also covers native compaction, repeated cleanup and fresh-store restoration.
 These are contributor requirements, not a claim of completed format coverage.
+
+Run unit tests with `python3 -m unittest discover -p 'test*.py'`. The opt-in
+`python3 probe_codex_chat.py` generates both formats with the installed native
+CLI against a loopback Responses stub (no account or model quota). It covers
+two native compactions, interrupted/failed turns, repeated cleanup, active model
+records, complete app-server display history, fresh and cached stores, a stale-
+index negative control, unrelated-thread preservation and headless continuation.
+Temporary fixtures are removed afterward. This checks native display data, not
+pixel-level terminal rendering.
 
 ## Files
 

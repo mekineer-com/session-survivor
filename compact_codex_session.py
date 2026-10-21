@@ -16,6 +16,7 @@ from lineage import (
     infer_source_kind,
 )
 from codex_safety import (
+    codex_history_mode,
     compute_ancestor_depth,
     detect_model_switches,
     summarize_models_seen,
@@ -1066,6 +1067,9 @@ def main() -> int:
     }
 
     records = [json.loads(line) for line in original_bytes.splitlines()]
+    history_mode = codex_history_mode(records)
+    if history_mode == "paginated" and args.emit_compacted_spans:
+        raise SystemExit("Semantic resume compaction is not supported for paginated histories; use chat_codex_session.py.")
     format_warnings = core_format_warnings(records)
     for warning in format_warnings:
         print(f"WARNING: {warning}", file=sys.stderr)
@@ -1183,6 +1187,7 @@ def main() -> int:
         bytes_saved=len(original_bytes) - len(compacted_bytes),
         keep_last_turns=args.keep_last_turns,
         max_replacement_records=args.max_replacement_records,
+        history_mode=history_mode,
     )
     manifest.setdefault("policy", {})
     manifest["policy"]["compaction_depth"] = depth

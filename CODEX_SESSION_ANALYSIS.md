@@ -32,8 +32,51 @@ Before claiming support for a CLI version or shipping a format-sensitive change:
 - If a format cannot pass these checks, label it unverified or unsupported and
   document the specific limit. Never silently substitute legacy-only results.
 
-This is a testing requirement, not a claim that the matrix already passes.
-The paginated chat-display defect documented below remains unresolved.
+This is a testing requirement, not a claim that every vendor/profile already
+passes. Native Codex chat maintenance is covered by `probe_codex_chat.py`;
+weekly import and advanced semantic resume remain legacy-only.
+
+## Paginated Chat Preservation Fix
+
+The October20 correction keeps native UserMessage, AgentMessage and
+ContextCompaction completion records with their original ordinals, IDs, turn
+attribution and content. Unchanged paginated messages retain their entire native
+envelope; deliberately truncated messages do not retain stale complete-source
+metadata. Paginated histories preserve native abort/failure state and bypass
+legacy synthetic replay/closure. Input and output ordinal validation reject
+malformed native structure without manufacturing replacement positions.
+
+Legacy replay remains in place. Native controls exposed one related correction:
+preserve context_compacted markers and do not replay a compaction-only summary
+as an assistant answer, including after older empty checkpoints are dropped on
+repeated cleanup. Original user-input evidence prevents suppressing genuine
+answers to nontext user turns.
+
+All supported Codex candidate manifests identify history mode and whether a
+display-index reset is required after swapping. The generators still only
+produce candidates: operators must perform the target-only reset described in
+the runbook while the target is closed. Other threads and the identity database
+must not be reset. Native ordinal gaps after intentional bulk removal are
+allowed and can log diagnostics; this is not a claim of warning-free imports.
+
+`probe_codex_chat.py` generates genuine legacy and paginated fixtures using the
+installed native CLI and a local model stub, including native compaction and
+interruption/failure. It compares complete projected dialogue, active model
+records, repeated output, fresh/cached imports, the stale-index failure without
+a reset, and an unrelated thread through the native API. A headless continuation
+also completes locally. No real session or external model is used by this probe.
+
+Provenance: our generic dropping/rebuilding policy originated in May4 d16db6da
+and May5 25c35e05; August27 f80e0a45 added legacy replay events. Native paginated
+completion persistence began with July9 2342b2c2a6, projection/ordinals with
+July11 5c19155cbd, SQLite materialization July14 0ef9fa4d65, and app-server
+enablement July15 da61f7d8e1. August15 c4941302c7 enabled persistent exec usage;
+September24 12cb14f7b7 made local-thread creation default to paginated. These
+native commits are ancestors of the actual a1e4e8f45e executable source. Vesper's
+saved original already declares paginated/exec; legacy Aster/Codex/Ari snapshots
+do not. This was an old local assumption becoming incompatible with an upstream
+format path, not the October9 checkpoint-metadata fix. Vesper's precise original
+creation binary or migration history was not independently established.
 
 ## One Rule You Must Not Break
 

@@ -14,6 +14,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from artifact_publish import publish_artifacts
+from codex_safety import codex_history_mode
 from compact_codex_session import core_format_warnings
 from lineage import build_compaction_manifest, describe_lineage
 
@@ -524,6 +525,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     original_sha256 = sha256_bytes(original_bytes)
     original_validation = validate_jsonl_bytes(original_bytes)
     records = [json.loads(line) for line in original_bytes.splitlines()]
+    history_mode = codex_history_mode(records)
+    if history_mode == "paginated":
+        raise SystemExit("Weekly summary import is not supported for paginated histories; use chat_codex_session.py.")
 
     warnings = core_format_warnings(records)
     if warnings:
@@ -708,6 +712,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             bytes_saved=len(original_bytes) - len(compacted_bytes),
             keep_last_turns=args.safe_tail_turns,
             max_replacement_records=0,
+            history_mode=history_mode,
         )
         manifest.setdefault("policy", {})
         manifest["policy"]["summary_file"] = str(summary_file)

@@ -102,6 +102,7 @@ def build_compaction_manifest(
     bytes_saved: int,
     keep_last_turns: int,
     max_replacement_records: int,
+    history_mode: str | None = None,
 ) -> dict[str, Any]:
     source_resolved = source.resolve()
     parent_provenance = extract_checkpoint_provenance(source_resolved)
@@ -133,6 +134,8 @@ def build_compaction_manifest(
         "policy": {
             "keep_last_turns": keep_last_turns,
             "max_replacement_records": max_replacement_records,
+            **({"history_mode": history_mode, "display_index_reset_required_after_swap": history_mode == "paginated"}
+               if history_mode is not None else {}),
         },
         "result": {
             "compacted_sha256": compacted_sha256,

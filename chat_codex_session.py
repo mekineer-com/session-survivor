@@ -11,6 +11,7 @@ import sys
 from typing import Any
 
 from artifact_publish import publish_artifacts
+from codex_safety import codex_history_mode
 from compact_codex_session import MAX_COMPACTED_REPLACEMENT_HISTORY, compact_record, core_format_warnings
 from lineage import build_compaction_manifest, describe_lineage
 
@@ -317,15 +318,23 @@ def compact_chat_records(
     records: list[dict[str, Any]],
     args: argparse.Namespace,
     state: dict[str, int],
+    *,
+    paginated: bool = False,
 ) -> list[dict[str, Any]]:
     compacted: list[dict[str, Any]] = []
     for idx, obj in enumerate(records):
         boundary = turn_boundary_type(obj)
         if boundary == "turn_aborted":
+            if paginated:
+                compacted.append(obj)
+                state["kept_old_boundary_events"] += 1
+                continue
             state["dropped_old_boundary_events"] += 1
             continue
-        if boundary in {"task_started", "task_complete"}:
-            if boundary == "task_complete" and isinstance(obj.get("payload"), dict) and "error" in obj["payload"]:
+        if boundary in {"task_started", "task_complete"} or (
+            obj.get("type") == "event_msg" and obj.get("payload", {}).get("type") == "context_compacted"
+        ):
+            if not paginated and boundary == "task_complete" and isinstance(obj.get("payload"), dict) and "error" in obj["payload"]:
                 obj = dict(obj)
                 obj["payload"] = dict(obj["payload"])
                 obj["payload"].pop("error")
@@ -340,6 +349,14 @@ def compact_chat_records(
         # once across header + all old turns so "latest" means latest globally.
         if obj.get("type") == "compacted":
             compacted.append(obj)
+            continue
+
+        payload = obj.get("payload")
+        if (paginated and obj.get("type") == "event_msg" and isinstance(payload, dict)
+                and payload.get("type") == "item_completed"
+                and payload.get("item", {}).get("type") in {"UserMessage", "AgentMessage", "ContextCompaction"}):
+            compacted.append(obj)
+            state["kept_old_display_events"] += 1
             continue
 
         if obj.get("type") != "response_item":
@@ -361,6 +378,10 @@ def compact_chat_records(
 
         text = extract_message_text(payload.get("content"))
         if not text:
+            if paginated:
+                compacted.append(obj)
+                state["kept_chat_records"] += 1
+                continue
             state["dropped_non_text"] += 1
             continue
         if is_bootstrap_noise(role, text):
@@ -373,6 +394,11 @@ def compact_chat_records(
         text, changed = shorten(text, args.max_message_chars)
         if changed:
             state["messages_truncated"] += 1
+        elif paginated:
+            # Keep native content, IDs and their metadata coherent when text is unchanged.
+            compacted.append(obj)
+            state["kept_chat_records"] += 1
+            continue
 
         timestamp = obj.get("timestamp")
         if not isinstance(timestamp, str) or not timestamp:
@@ -389,13 +415,11 @@ def compact_chat_records(
         phase = payload.get("phase")
         if isinstance(phase, str) and phase:
             new_payload["phase"] = phase
-        compacted.append(
-            {
-                "type": "response_item",
-                "timestamp": timestamp,
-                "payload": new_payload,
-            }
-        )
+        new_obj = {"type": "response_item"}
+        if paginated:
+            new_obj["ordinal"] = obj["ordinal"]
+        new_obj.update(timestamp=timestamp, payload=new_payload)
+        compacted.append(new_obj)
         state["kept_chat_records"] += 1
 
     return compacted
@@ -456,8 +480,12 @@ def compact_old_turn(
     turn: list[dict[str, Any]],
     args: argparse.Namespace,
     state: dict[str, int],
+    *,
+    paginated: bool = False,
 ) -> list[dict[str, Any]]:
-    rows = compact_chat_records(turn, args, state)
+    rows = compact_chat_records(turn, args, state, paginated=paginated)
+    if paginated:
+        return rows
     if not any(turn_boundary_type(obj) == "task_complete" for obj in turn):
         rows.append(closing_task_complete(turn, state))
 
@@ -486,7 +514,16 @@ def compact_old_turn(
         rows.insert(start_index + 1, event)
         state["synthetic_old_user_message_events"] += 1
 
-    if agent is not None:
+    had_user_input = any(
+        obj.get("type") == "response_item" and obj.get("payload", {}).get("type") == "message"
+        and obj["payload"].get("role") == "user" for obj in turn
+    ) or any(obj.get("type") == "event_msg" and obj.get("payload", {}).get("type") == "user_message" for obj in turn)
+    compaction_only = not had_user_input and any(
+        obj.get("type") == "compacted" or (
+            obj.get("type") == "event_msg" and obj.get("payload", {}).get("type") == "context_compacted"
+        ) for obj in turn
+    )
+    if agent is not None and not compaction_only:
         payload = agent["payload"]
         event = {
             "type": "event_msg",
@@ -569,6 +606,7 @@ def main() -> int:
         "synthetic_old_task_complete": 0,
         "synthetic_old_user_message_events": 0,
         "synthetic_old_agent_message_events": 0,
+        "kept_old_display_events": 0,
         "messages_truncated": 0,
         "synthetic_timestamp_assigned": 0,
         "safe_tail_reasoning_encrypted_removed": 0,
@@ -586,6 +624,22 @@ def main() -> int:
     format_warnings = core_format_warnings(records)
     if format_warnings:
         raise SystemExit("Input session format drift: " + " | ".join(format_warnings))
+
+    meta = next((obj["payload"] for obj in records if obj.get("type") == "session_meta"), {})
+    history_mode = codex_history_mode(records)
+    paginated = history_mode == "paginated"
+    if paginated:
+        previous = -1
+        for index, obj in enumerate(records, 1):
+            ordinal = obj.get("ordinal")
+            if type(ordinal) is not int or ordinal < 0 or ordinal <= previous:
+                raise SystemExit(
+                    f"Invalid paginated ordinal at line {index}; preserve the source and repair from a verified backup."
+                )
+            previous = ordinal
+            payload = obj.get("payload", {})
+            if obj.get("type") == "event_msg" and payload.get("type") == "item_completed" and not isinstance(payload.get("item"), dict):
+                raise SystemExit(f"Invalid canonical item at line {index}")
 
     header_rows, turns = split_session_objects(records)
     if not turns:
@@ -608,7 +662,7 @@ def main() -> int:
 
     chat_rows = []
     for turn in old_turns:
-        chat_rows.extend(compact_old_turn(turn, args, state))
+        chat_rows.extend(compact_old_turn(turn, args, state, paginated=paginated))
 
     old_history_rows = apply_old_compacted_anchor_policy(header_rows + chat_rows, args, state)
 
@@ -640,9 +694,15 @@ def main() -> int:
     if not old_history_rows and not safe_tail_rows:
         raise SystemExit("No records survived filtering; refusing to write empty output file.")
 
+    output_rows = old_history_rows + safe_tail_rows
+    if paginated:
+        ordinals = [obj.get("ordinal") for obj in output_rows]
+        if (any(type(value) is not int or value < 0 for value in ordinals)
+                or any(a >= b for a, b in zip(ordinals, ordinals[1:]))):
+            raise SystemExit("Invalid output paginated ordinals; no candidate published")
     compacted_bytes = b"".join(
         (json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
-        for row in old_history_rows + safe_tail_rows
+        for row in output_rows
     )
     compacted_validation = validate_jsonl_bytes(compacted_bytes)
     compacted_sha256 = sha256_bytes(compacted_bytes)
@@ -656,6 +716,10 @@ def main() -> int:
 
     compacted_anchor_policy = "latest_replacement_history_pruned_older_stripped"
     old_history_output_type = "chat-compacted-history(response_item.message + compacted(shells, latest pruned))"
+    kept_boundaries = ["task_started", "task_complete", "context_compacted"] + (["turn_aborted"] if paginated else [])
+    dropped_events = [] if paginated else ["turn_aborted"]
+    synthetic_events = [] if paginated else ["user_message", "agent_message"]
+    display_types = ["UserMessage", "AgentMessage", "ContextCompaction"] if paginated else []
 
     report = {
         "source": str(source),
@@ -672,6 +736,7 @@ def main() -> int:
         "changes": state,
         "warnings": [],
         "policy": {
+            "history_mode": history_mode,
             "profile": "codex-chat-resume-hybrid-safe-tail",
             "max_message_chars": args.max_message_chars,
             "safe_tail_turns": args.safe_tail_turns,
@@ -680,9 +745,11 @@ def main() -> int:
             "keep_replacement_history_user_messages": args.keep_replacement_history_user_messages,
             "kept_roles": ["user", "assistant"],
             "kept_compacted_anchor": compacted_anchor_policy,
-            "chat_history_kept_boundary_event_types": ["task_started", "task_complete"],
-            "chat_history_dropped_event_types": ["turn_aborted"],
-            "chat_history_synthetic_event_types": ["user_message", "agent_message"],
+            "chat_history_kept_boundary_event_types": kept_boundaries,
+            "chat_history_dropped_event_types": dropped_events,
+            "chat_history_synthetic_event_types": synthetic_events,
+            "chat_history_kept_display_item_types": display_types,
+            "display_index_reset_required_after_swap": paginated,
             "safe_tail_kept_record_types": [
                 "event_msg",
                 "response_item",
@@ -694,7 +761,7 @@ def main() -> int:
             "output_record_types": [
                 "session_meta/header",
                 old_history_output_type,
-                "event_msg.user_message + event_msg.agent_message(summary replay)",
+                "event_msg.item_completed(chat/compaction)" if paginated else "event_msg.user_message + event_msg.agent_message(summary replay)",
                 "safe-tail(native turn records)",
             ],
         },
@@ -714,6 +781,7 @@ def main() -> int:
         bytes_saved=len(original_bytes) - len(compacted_bytes),
         keep_last_turns=0,
         max_replacement_records=MAX_COMPACTED_REPLACEMENT_HISTORY,
+        history_mode=history_mode,
     )
     manifest.setdefault("policy", {})
     manifest["policy"]["max_message_chars"] = args.max_message_chars
@@ -724,9 +792,10 @@ def main() -> int:
     manifest["policy"]["kept_roles"] = ["user", "assistant"]
     manifest["policy"]["kept_compacted_anchor"] = compacted_anchor_policy
     manifest["policy"]["compacted_replacement_history"] = "latest_native_checkpoint_pruned_older_stripped"
-    manifest["policy"]["chat_history_kept_boundary_event_types"] = ["task_started", "task_complete"]
-    manifest["policy"]["chat_history_dropped_event_types"] = ["turn_aborted"]
-    manifest["policy"]["chat_history_synthetic_event_types"] = ["user_message", "agent_message"]
+    manifest["policy"]["chat_history_kept_boundary_event_types"] = kept_boundaries
+    manifest["policy"]["chat_history_dropped_event_types"] = dropped_events
+    manifest["policy"]["chat_history_synthetic_event_types"] = synthetic_events
+    manifest["policy"]["chat_history_kept_display_item_types"] = display_types
     manifest["policy"]["safe_tail_kept_record_types"] = [
         "event_msg",
         "response_item",
@@ -757,6 +826,8 @@ def main() -> int:
                     "changes": state,
                     "report_path": str(report_path),
                     "manifest_path": str(manifest_path),
+                    "session_id": meta.get("id"),
+                    "display_index_reset_required_after_swap": paginated,
                 },
                 indent=2,
                 ensure_ascii=False,

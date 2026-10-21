@@ -37,6 +37,47 @@ python3 chat_codex_session.py "$TARGET" --output-root "$RUN" --show-summary
 6. Verify the installed hash and JSON again. Resume by session ID and ask one
    ordinary continuity question before considering maintenance accepted.
 
+### Paginated Display Index
+
+For paginated histories, perform this extra step **after replacement and before
+resuming**. The report/manifest and `--show-summary` output flag this as
+`display_index_reset_required_after_swap`. The CLI caches byte positions, so
+even a correct replacement file can otherwise leave a stale display index.
+This applies to every paginated replacement, including repeated cleanup.
+
+Keep the target session closed. Other agents can remain open. Use the installed
+CLI's actual derived-history database path (adjust `INDEX` for a custom SQLite
+directory). Never delete the whole database or change `state_5.sqlite`.
+
+```sh
+INDEX="${CODEX_HOME:-$HOME/.codex}/thread_history_1.sqlite"
+SID="$(head -n 1 "$TARGET" | jq -er 'select(.type == "session_meta") | .payload.id | select(test("^[0-9a-fA-F-]{36}$"))')" || exit 1
+# RUN is the unique maintenance output directory, with the original already saved.
+if test -f "$INDEX"; then
+test ! -e "$RUN/display-index-before.sqlite" || exit 1
+sqlite3 -bail -cmd '.timeout 5000' "$INDEX" ".backup '$RUN/display-index-before.sqlite'" || exit 1
+sqlite3 -bail -cmd '.timeout 5000' "$INDEX" <<SQL
+.parameter init
+.parameter set @thread_id '$SID'
+BEGIN IMMEDIATE;
+DELETE FROM thread_items WHERE thread_id = @thread_id;
+DELETE FROM thread_realtime_items WHERE thread_id = @thread_id;
+DELETE FROM thread_turns WHERE thread_id = @thread_id;
+DELETE FROM thread_history_projection_state WHERE thread_id = @thread_id;
+COMMIT;
+SQL
+test "$?" -eq 0 || exit 1
+fi
+```
+
+These are only the target's derived display rows, following native deletion
+semantics; its identity, JSONL and other threads remain. Native resume rebuilds
+the index. If no derived-history database exists yet, no reset is needed.
+Check complete older dialogue after resume, not only the newest reply. A
+rollback must not overwrite a shared database with the old whole-DB snapshot
+while other agents are active: restore only the target's cache rows or rebuild
+that target again from its restored original JSONL.
+
 If any gate fails, do not swap. The run's `original/` copy is the rollback.
 
 ## Profile Comparison

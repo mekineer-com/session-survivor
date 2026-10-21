@@ -8,6 +8,16 @@ import pathlib
 from lineage import extract_checkpoint_provenance
 
 
+def codex_history_mode(records: list[dict]) -> str:
+    meta = next((row.get("payload") for row in records if row.get("type") == "session_meta"), {})
+    if not isinstance(meta, dict):
+        raise SystemExit("Invalid session_meta payload")
+    mode = meta.get("history_mode", "legacy")
+    if mode not in ("legacy", "paginated"):
+        raise SystemExit(f"Unsupported history_mode: {mode!r}")
+    return mode
+
+
 def detect_model_switches(records: list[dict]) -> list[dict]:
     """Scan turn_context records for model changes."""
     switches: list[dict] = []

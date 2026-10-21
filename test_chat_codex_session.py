@@ -65,6 +65,70 @@ def run_candidate(args) -> int:
 
 
 class ChatCodexSessionTest(unittest.TestCase):
+    def test_paginated_chat_preserves_native_events_and_ordinals(self) -> None:
+        rows = [
+            {"ordinal": 40, "type": "event_msg", "payload": {"type": "task_started", "turn_id": "t"}},
+            {"ordinal": 42, "timestamp": "2", "type": "response_item", "payload": {
+                "type": "message", "id": "native-user", "role": "user", "content": [
+                    {"type": "input_text", "text": "  Question\n"}, {"type": "input_text", "text": "Part two"}]},
+             "metadata": {"retained_source": {"complete": True}, "future_field": 3}},
+            {"ordinal": 43, "type": "event_msg", "payload": {"type": "item_completed", "turn_id": "t",
+                "item": {"type": "UserMessage", "id": "u", "content": []}}},
+            {"ordinal": 46, "type": "event_msg", "payload": {"type": "turn_aborted", "turn_id": "t"}},
+        ]
+        state = defaultdict(int)
+        output = compact_old_turn(rows, SimpleNamespace(max_message_chars=20_000), state, paginated=True)
+        self.assertEqual([row["ordinal"] for row in output], [40, 42, 43, 46])
+        self.assertEqual(output[2:], rows[2:])
+        self.assertEqual(output[1], rows[1])
+        self.assertEqual(state["kept_old_display_events"], 1)
+        self.assertEqual(state["synthetic_old_task_complete"], 0)
+        self.assertEqual(state["synthetic_old_user_message_events"], 0)
+
+    def test_paginated_invalid_ordinals_publish_nothing(self) -> None:
+        for invalid in (None, True, -1, "1", 0):
+            with self.subTest(ordinal=invalid), tempfile.TemporaryDirectory() as directory:
+                source, _, args, public_paths = candidate_fixture(Path(directory))
+                rows = [json.loads(line) for line in source.read_text().splitlines()]
+                rows.insert(0, {"type": "session_meta", "payload": {"history_mode": "paginated"}})
+                for ordinal, row in enumerate(rows):
+                    row["ordinal"] = ordinal
+                rows[-1]["ordinal"] = invalid
+                source.write_text("".join(json.dumps(row) + "\n" for row in rows))
+                with self.assertRaisesRegex(SystemExit, "Invalid paginated ordinal"):
+                    run_candidate(args)
+                self.assertFalse(any(path.exists() for path in public_paths))
+
+    def test_legacy_compaction_marker_is_not_replayed_as_an_answer(self) -> None:
+        rows = [
+            {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "compact"}},
+            {"type": "response_item", "payload": {"type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "Internal compact summary"}]}},
+            {"type": "compacted", "payload": {"message": "", "replacement_history": []}},
+            {"type": "event_msg", "payload": {"type": "context_compacted"}},
+            {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "compact"}},
+        ]
+        state = defaultdict(int)
+        output = compact_old_turn(rows, SimpleNamespace(max_message_chars=20_000), state)
+        self.assertIn(rows[3], output)
+        self.assertEqual(state["synthetic_old_agent_message_events"], 0)
+        self.assertTrue(any(row.get("type") == "response_item" for row in output))
+        without_dropped_anchor = [row for row in output if row.get("type") != "compacted"]
+        repeated = compact_old_turn(without_dropped_anchor, SimpleNamespace(max_message_chars=20_000), defaultdict(int))
+        self.assertFalse(any(row.get("payload", {}).get("type") == "agent_message" for row in repeated))
+
+    def test_paginated_truncation_does_not_keep_complete_source_metadata(self) -> None:
+        row = {"type": "response_item", "ordinal": 9, "payload": {
+            "type": "message", "role": "user", "id": "native-user",
+            "content": [{"type": "input_text", "text": "word " * 500}]},
+            "metadata": {"retained_source": {"complete": True}}}
+        state = defaultdict(int)
+        output = compact_chat_records([row], SimpleNamespace(max_message_chars=100), state, paginated=True)
+        self.assertNotIn("metadata", output[0])
+        self.assertEqual(output[0]["ordinal"], 9)
+        self.assertEqual(state["messages_truncated"], 1)
+        self.assertIn("metadata", row)
+
     def test_token_accounting_survives_safe_and_chat_tail_cleanup(self) -> None:
         usage = {
             "input_tokens": 12, "cached_input_tokens": 4, "output_tokens": 3,
@@ -200,6 +264,40 @@ class ChatCodexSessionTest(unittest.TestCase):
         self.assertNotIn("error", output[0]["payload"])
         self.assertIn("error", row["payload"])
         self.assertEqual(state["dropped_old_task_complete_errors"], 1)
+
+    def test_paginated_completion_preserves_failure(self) -> None:
+        row = {"ordinal": 7, "type": "event_msg", "payload": {
+            "type": "task_complete", "turn_id": "failed", "error": {"message": "Fictional failure"}}}
+        output = compact_chat_records([row], SimpleNamespace(), defaultdict(int), paginated=True)
+        self.assertEqual(output, [row])
+
+    def test_compaction_during_nontext_user_turn_keeps_assistant_replay(self) -> None:
+        rows = [
+            {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "image"}},
+            {"type": "response_item", "payload": {"type": "message", "role": "user", "content": []}},
+            {"type": "compacted", "payload": {"replacement_history": []}},
+            {"type": "response_item", "payload": {"type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "Actual answer"}]}},
+            {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "image"}},
+        ]
+        output = compact_old_turn(rows, SimpleNamespace(max_message_chars=20_000), defaultdict(int))
+        self.assertTrue(any(row.get("payload", {}).get("type") == "agent_message" for row in output))
+
+    def test_paginated_manifest_reports_native_replay_and_index_reset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source, _, args, public_paths = candidate_fixture(Path(directory))
+            rows = [json.loads(line) for line in source.read_text().splitlines()]
+            rows.insert(0, {"type": "session_meta", "payload": {"history_mode": "paginated"}})
+            for ordinal, row in enumerate(rows, 30):
+                row["ordinal"] = ordinal
+            source.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            self.assertEqual(run_candidate(args), 0)
+            for path in (public_paths[2], public_paths[3]):
+                policy = json.loads(path.read_text())["policy"]
+                self.assertEqual(policy["history_mode"], "paginated")
+                self.assertTrue(policy["display_index_reset_required_after_swap"])
+                self.assertEqual(policy["chat_history_synthetic_event_types"], [])
+                self.assertEqual(policy["chat_history_dropped_event_types"], [])
 
     def test_old_turn_gets_summary_replay_events(self) -> None:
         rows = [
