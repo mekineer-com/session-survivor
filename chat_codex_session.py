@@ -352,6 +352,13 @@ def compact_chat_records(
             continue
 
         payload = obj.get("payload")
+        if not paginated and obj.get("type") == "event_msg" and isinstance(payload, dict) and payload.get("type") == "user_message":
+            message = payload.get("message", "")
+            if isinstance(message, str) and (is_bootstrap_noise("user", message) or is_meta_noise(message)) and message.strip():
+                continue
+            compacted.append(obj)
+            state["kept_old_user_message_events"] += 1
+            continue
         if (paginated and obj.get("type") == "event_msg" and isinstance(payload, dict)
                 and payload.get("type") == "item_completed"
                 and payload.get("item", {}).get("type") in {"UserMessage", "AgentMessage", "ContextCompaction"}):
@@ -378,7 +385,7 @@ def compact_chat_records(
 
         text = extract_message_text(payload.get("content"))
         if not text:
-            if paginated:
+            if paginated or (role == "user" and payload.get("content")):
                 compacted.append(obj)
                 state["kept_chat_records"] += 1
                 continue
@@ -391,14 +398,15 @@ def compact_chat_records(
             state["dropped_meta_noise"] += 1
             continue
 
-        text, changed = shorten(text, args.max_message_chars)
-        if changed:
-            state["messages_truncated"] += 1
-        elif paginated:
-            # Keep native content, IDs and their metadata coherent when text is unchanged.
+        if paginated:
+            if len(text) > args.max_message_chars:
+                raise SystemExit("Paginated conversation text exceeds --max-message-chars; increase the limit to preserve model/display agreement.")
             compacted.append(obj)
             state["kept_chat_records"] += 1
             continue
+        text, changed = shorten(text, args.max_message_chars)
+        if changed:
+            state["messages_truncated"] += 1
 
         timestamp = obj.get("timestamp")
         if not isinstance(timestamp, str) or not timestamp:
@@ -416,8 +424,6 @@ def compact_chat_records(
         if isinstance(phase, str) and phase:
             new_payload["phase"] = phase
         new_obj = {"type": "response_item"}
-        if paginated:
-            new_obj["ordinal"] = obj["ordinal"]
         new_obj.update(timestamp=timestamp, payload=new_payload)
         compacted.append(new_obj)
         state["kept_chat_records"] += 1
@@ -503,7 +509,8 @@ def compact_old_turn(
         assistants[-1] if assistants else None,
     )
 
-    if user is not None:
+    existing_user_event = any(obj.get("type") == "event_msg" and obj.get("payload", {}).get("type") == "user_message" for obj in rows)
+    if user is not None and not existing_user_event:
         payload = user["payload"]
         event = {
             "type": "event_msg",
@@ -514,10 +521,7 @@ def compact_old_turn(
         rows.insert(start_index + 1, event)
         state["synthetic_old_user_message_events"] += 1
 
-    had_user_input = any(
-        obj.get("type") == "response_item" and obj.get("payload", {}).get("type") == "message"
-        and obj["payload"].get("role") == "user" for obj in turn
-    ) or any(obj.get("type") == "event_msg" and obj.get("payload", {}).get("type") == "user_message" for obj in turn)
+    had_user_input = user is not None or existing_user_event
     compaction_only = not had_user_input and any(
         obj.get("type") == "compacted" or (
             obj.get("type") == "event_msg" and obj.get("payload", {}).get("type") == "context_compacted"
@@ -607,6 +611,7 @@ def main() -> int:
         "synthetic_old_user_message_events": 0,
         "synthetic_old_agent_message_events": 0,
         "kept_old_display_events": 0,
+        "kept_old_user_message_events": 0,
         "messages_truncated": 0,
         "synthetic_timestamp_assigned": 0,
         "safe_tail_reasoning_encrypted_removed": 0,

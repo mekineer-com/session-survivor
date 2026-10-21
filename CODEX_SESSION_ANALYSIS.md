@@ -41,8 +41,8 @@ weekly import and advanced semantic resume remain legacy-only.
 The October20 correction keeps native UserMessage, AgentMessage and
 ContextCompaction completion records with their original ordinals, IDs, turn
 attribution and content. Unchanged paginated messages retain their entire native
-envelope; deliberately truncated messages do not retain stale complete-source
-metadata. Paginated histories preserve native abort/failure state and bypass
+envelope. Paginated text truncation is refused rather than publishing inconsistent
+model/display content. Paginated histories preserve native abort/failure state and bypass
 legacy synthetic replay/closure. Input and output ordinal validation reject
 malformed native structure without manufacturing replacement positions.
 

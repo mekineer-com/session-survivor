@@ -117,16 +117,14 @@ class ChatCodexSessionTest(unittest.TestCase):
         repeated = compact_old_turn(without_dropped_anchor, SimpleNamespace(max_message_chars=20_000), defaultdict(int))
         self.assertFalse(any(row.get("payload", {}).get("type") == "agent_message" for row in repeated))
 
-    def test_paginated_truncation_does_not_keep_complete_source_metadata(self) -> None:
+    def test_paginated_truncation_is_refused(self) -> None:
         row = {"type": "response_item", "ordinal": 9, "payload": {
             "type": "message", "role": "user", "id": "native-user",
             "content": [{"type": "input_text", "text": "word " * 500}]},
             "metadata": {"retained_source": {"complete": True}}}
         state = defaultdict(int)
-        output = compact_chat_records([row], SimpleNamespace(max_message_chars=100), state, paginated=True)
-        self.assertNotIn("metadata", output[0])
-        self.assertEqual(output[0]["ordinal"], 9)
-        self.assertEqual(state["messages_truncated"], 1)
+        with self.assertRaisesRegex(SystemExit, "increase the limit"):
+            compact_chat_records([row], SimpleNamespace(max_message_chars=100), state, paginated=True)
         self.assertIn("metadata", row)
 
     def test_token_accounting_survives_safe_and_chat_tail_cleanup(self) -> None:
@@ -274,7 +272,8 @@ class ChatCodexSessionTest(unittest.TestCase):
     def test_compaction_during_nontext_user_turn_keeps_assistant_replay(self) -> None:
         rows = [
             {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "image"}},
-            {"type": "response_item", "payload": {"type": "message", "role": "user", "content": []}},
+            {"type": "response_item", "payload": {"type": "message", "role": "user",
+                "content": [{"type": "input_image", "image_url": "data:image/png;base64,fictional"}]}},
             {"type": "compacted", "payload": {"replacement_history": []}},
             {"type": "response_item", "payload": {"type": "message", "role": "assistant",
                 "content": [{"type": "output_text", "text": "Actual answer"}]}},
@@ -282,6 +281,22 @@ class ChatCodexSessionTest(unittest.TestCase):
         ]
         output = compact_old_turn(rows, SimpleNamespace(max_message_chars=20_000), defaultdict(int))
         self.assertTrue(any(row.get("payload", {}).get("type") == "agent_message" for row in output))
+        repeated = compact_old_turn([row for row in output if row.get("type") != "compacted"],
+                                    SimpleNamespace(max_message_chars=20_000), defaultdict(int))
+        self.assertTrue(any(row.get("payload", {}).get("type") == "agent_message" for row in repeated))
+
+    def test_bootstrap_user_does_not_turn_compaction_into_an_answer(self) -> None:
+        rows = [
+            {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "compact"}},
+            {"type": "response_item", "payload": {"type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "<environment_context>fixture</environment_context>"}]}},
+            {"type": "response_item", "payload": {"type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "Internal summary"}]}},
+            {"type": "event_msg", "payload": {"type": "context_compacted"}},
+            {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "compact"}},
+        ]
+        output = compact_old_turn(rows, SimpleNamespace(max_message_chars=20_000), defaultdict(int))
+        self.assertFalse(any(row.get("payload", {}).get("type") == "agent_message" for row in output))
 
     def test_paginated_manifest_reports_native_replay_and_index_reset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
