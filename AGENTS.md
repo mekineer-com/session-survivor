@@ -13,3 +13,13 @@ Root scripts are active; `previous-versions/` is archival/reference only.
 Never transform or replace an open session. Preserve the original and validate
 against the unchanged source before swapping; follow the runbook rather than
 reconstructing the procedure. Extend the nearest existing preservation test.
+
+## Test Old And New Native Formats
+
+Our long-lived sessions are not compatibility coverage for new users. Before
+claiming a maintenance profile supports a CLI, test both legacy sessions and
+fresh native sessions from its newest supported format. Check model context
+and visible conversation history separately; successful resume or valid JSON
+does not prove both survived. Follow the required matrix in
+[Codex Session Analysis](CODEX_SESSION_ANALYSIS.md#required-cross-format-validation),
+and apply the same old/new-format principle to the other supported CLIs.

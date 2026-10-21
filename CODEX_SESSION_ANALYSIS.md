@@ -8,6 +8,33 @@ It is written for operators using agentic CLI day to day.
 For the source-code-level loader contract, read `CODEX_CLI_SESSION_MEMORY.md`.
 For model-specific JSONL differences, read `CODEX_MODEL_JSONL_COMPAT.md`.
 
+## Required Cross-Format Validation
+
+**Old sessions working does not establish support for new sessions.** Our
+long-lived legacy threads concealed a compatibility gap: paginated sessions
+need display records that legacy histories do not. Keep format coverage current
+as the CLI evolves, rather than testing only the sessions we personally use.
+
+Before claiming support for a CLI version or shipping a format-sensitive change:
+
+- Test both legacy fixtures and fresh native fixtures from the newest supported
+  CLI format. For Codex, explicitly include legacy and paginated histories.
+  Record the actual CLI/source revision and history mode, not just a version label.
+- Generate disposable fixtures with the native CLI using fictional dialogue;
+  do not merely relabel old JSONL or handcraft the only new-format fixture.
+  Retain fixtures for supported formats as regressions when upstream changes.
+- Compare unmodified and cleaned controls for model input AND visible history,
+  including dialogue before and after native compaction. Resume success, JSON
+  parsing and text remaining on disk are not substitutes for either check.
+- Cover a fresh session, a natively compacted session, repeated cleanup/resume,
+  and restoration into an empty session store. Check interactive and headless
+  paths where support is claimed. Prefer local model stubs when sufficient.
+- If a format cannot pass these checks, label it unverified or unsupported and
+  document the specific limit. Never silently substitute legacy-only results.
+
+This is a testing requirement, not a claim that the matrix already passes.
+The paginated chat-display defect documented below remains unresolved.
+
 ## One Rule You Must Not Break
 
 - `event_msg.payload.type == task_started` records are turn boundaries.

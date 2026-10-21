@@ -19,6 +19,12 @@ vendor guidance, research evidence, and the local inspection cadence.
 
 This repo is actively used script tooling, not a packaged release.
 
+**Known Codex limitation:** `chat_codex_session.py` currently loses older
+browsable dialogue in newer paginated histories, even though the text remains
+in the file. Avoid this chat cleanup on paginated histories until preservation
+is fixed and validated; a successful resume does not establish display safety.
+See [the analysis](CODEX_SESSION_ANALYSIS.md#accounting-repair-copy-experiment).
+
 Default operator path:
 
 - use `chat_*` scripts first for live session maintenance
@@ -486,6 +492,15 @@ Session chaining (what this means):
 - if you compact that compacted output again, the new file becomes the next child in the chain
 - `--show-lineage` follows those links backward so you can see ancestry from newest output to original source
 - this gives an audit trail for multi-step compact/continue workflows instead of opaque one-off rewrites
+
+## Compatibility Testing
+
+Passing on our old sessions is not enough. Maintenance profiles must be tested
+on both legacy and newest supported native formats, checking model context and
+visible history separately. The
+[required test matrix](CODEX_SESSION_ANALYSIS.md#required-cross-format-validation)
+also covers native compaction, repeated cleanup and fresh-store restoration.
+These are contributor requirements, not a claim of completed format coverage.
 
 ## Files
 
