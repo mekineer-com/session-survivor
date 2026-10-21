@@ -38,6 +38,23 @@ weekly import and advanced semantic resume remain legacy-only.
 
 ## Paginated Chat Preservation Fix
 
+**Delivered October20, 2026.** The code fix passed80 unit tests plus both native
+format controls. Real Vesper was repaired while closed, with online SQLite and
+full JSONL rollback copies in `outputs/vesper-paginated-repair-20261020-final/`.
+The transaction removed only her derived index rows; other threads' counts
+were unchanged. Native continuation rebuilt her index, and a separate live
+read verified all244 original chat/compaction IDs, turn IDs and text hashes.
+Later audit messages remain normally appended; no Aster/Codex/Ari repair was
+needed. Native headless audits completed successfully without transport or
+account changes; the earlier server replay error's exact trigger was not proved.
+
+Vesper and fresh Opus auditors reviewed source and repair mappings, then checked
+the resulting corrections. Their concrete findings were fixed and regression-
+tested; final acceptance found no remaining blockers. Reviewers performed source
+and some fictional in-memory checks, not an independent execution of the native
+probe. Aster ran the unit/native tests and live index-content verification.
+This verifies native display data, not manual pixel-level terminal acceptance.
+
 The October20 correction keeps native UserMessage, AgentMessage and
 ContextCompaction completion records with their original ordinals, IDs, turn
 attribution and content. Unchanged paginated messages retain their entire native

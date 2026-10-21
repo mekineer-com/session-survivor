@@ -298,6 +298,24 @@ class ChatCodexSessionTest(unittest.TestCase):
         output = compact_old_turn(rows, SimpleNamespace(max_message_chars=20_000), defaultdict(int))
         self.assertFalse(any(row.get("payload", {}).get("type") == "agent_message" for row in output))
 
+    def test_legacy_user_event_and_model_text_share_the_limit(self) -> None:
+        text = "word " * 500
+        rows = [
+            {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "long"}},
+            {"type": "event_msg", "payload": {"type": "user_message", "message": text,
+                "text_elements": [{"stale": "range"}], "images": ["fictional-image"]}},
+            {"type": "response_item", "payload": {"type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": text}]}},
+            {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "long"}},
+        ]
+        output = compact_old_turn(rows, SimpleNamespace(max_message_chars=100), defaultdict(int))
+        event = next(row["payload"] for row in output if row.get("payload", {}).get("type") == "user_message")
+        model = next(row["payload"]["content"][0]["text"] for row in output if row["type"] == "response_item")
+        self.assertEqual(event["message"], model)
+        self.assertNotIn("text_elements", event)
+        self.assertEqual(event["images"], ["fictional-image"])
+        self.assertIn("text_elements", rows[1]["payload"])
+
     def test_paginated_manifest_reports_native_replay_and_index_reset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source, _, args, public_paths = candidate_fixture(Path(directory))

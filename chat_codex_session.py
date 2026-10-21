@@ -356,6 +356,14 @@ def compact_chat_records(
             message = payload.get("message", "")
             if isinstance(message, str) and (is_bootstrap_noise("user", message) or is_meta_noise(message)) and message.strip():
                 continue
+            if isinstance(message, str):
+                original_message = message
+                message, truncated = shorten(message.strip(), args.max_message_chars)
+                if message != original_message:
+                    obj = dict(obj)
+                    obj["payload"] = dict(payload, message=message)
+                    obj["payload"].pop("text_elements", None)
+                    state["messages_truncated"] += int(truncated)
             compacted.append(obj)
             state["kept_old_user_message_events"] += 1
             continue
